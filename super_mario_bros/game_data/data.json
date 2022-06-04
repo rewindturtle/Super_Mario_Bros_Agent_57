@@ -1,0 +1,20 @@
+{
+  "info": {
+    "x1": {
+      "address": 109,
+      "type": "|u1"
+    },
+	"x2": {
+      "address": 134,
+      "type": "|u1"
+    },
+	"lives": {
+      "address": 1882,
+      "type": "|u1"
+    },
+	"level": {
+      "address": 1888,
+      "type": "|u1"
+    }
+  }
+}
