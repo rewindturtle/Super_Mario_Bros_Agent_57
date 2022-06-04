@@ -1,26 +1,21 @@
 from Hyperparameters import *
-from tensorflow.keras.models import *
-from tensorflow.keras.layers import *
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import Huber
-import tensorflow.keras.backend as K
-
-
-PRINT_SUMMARY = True
 
 
 def dueling_output(input_layer):
+    import tensorflow.keras.backend as K
     state_layer = input_layer[0]
     action_layer = input_layer[1]
     return state_layer + action_layer - K.mean(action_layer, axis = 1, keepdims = True)
 
 
 def h(input_layer):
+    import tensorflow.keras.backend as K
     squish = K.sign(input_layer) * (K.sqrt(K.abs(input_layer) + 1) - 1) + SQUISH * input_layer
     return squish
 
 
 def h_inv(input_layer):
+    import tensorflow.keras.backend as K
     arg = 4 * SQUISH * (K.abs(input_layer) + SQUISH + 1) + 1
     f1 = (1 - K.sqrt(arg)) / (2 * (SQUISH ** 2))
     f2 = (K.abs(input_layer) + 1) / SQUISH
@@ -37,6 +32,9 @@ def combine_q(input_layer):
 
 
 def create_conv_input():
+    import tensorflow.keras.backend as K
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Conv2D, Flatten, Input
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
     frame_exp = K.expand_dims(frame_input, axis = -1)
     conv1 = Conv2D(16,
@@ -60,6 +58,9 @@ def create_conv_input():
 
 
 def create_time_dist_conv_input():
+    import tensorflow.keras.backend as K
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Conv2D, Flatten, TimeDistributed, Input
     frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
     frame_exp = K.expand_dims(frame_input, axis = -1)
     conv1 = TimeDistributed(Conv2D(16,
@@ -83,6 +84,9 @@ def create_time_dist_conv_input():
 
 
 def create_inner_player_predictor():
+    import tensorflow.keras.backend as K
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Input, LSTM, Concatenate, Dense, Lambda
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = NUM_ACTIONS)
     discount_input = Input(shape = 1)
@@ -113,6 +117,9 @@ def create_inner_player_predictor():
 
 
 def create_player_predictor():
+    import tensorflow.keras.backend as K
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Input, Lambda
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = NUM_ACTIONS)
     discount_input = Input(shape = 1)
@@ -129,6 +136,8 @@ def create_player_predictor():
 
 
 def create_inner_trainer_predictor():
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Input, LSTM, Concatenate, Dense, Lambda, TimeDistributed
     frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = (NUM_LSTM_FRAMES, NUM_ACTIONS))
     discount_input = Input(shape = 1)
@@ -158,6 +167,10 @@ def create_inner_trainer_predictor():
 
 
 def create_trainer_predictor():
+    from tensorflow.keras.optimizers import Adam
+    from tensorflow.keras.losses import Huber
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Input
     frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = (NUM_LSTM_FRAMES, NUM_ACTIONS))
     discount_input = Input(shape = 1)
@@ -173,6 +186,8 @@ def create_trainer_predictor():
 
 
 def create_target_predictor():
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Input, Lambda
     frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = (NUM_LSTM_FRAMES, NUM_ACTIONS))
     discount_input = Input(shape = 1)

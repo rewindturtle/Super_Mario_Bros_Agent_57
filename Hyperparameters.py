@@ -11,3 +11,7 @@ SQUISH = 0.01
 
 LR = 1e-4
 CLIP_NORM = 50
+
+
+PRINT_SUMMARY = False
+RENDER = False
