@@ -40,13 +40,13 @@ class State_Wrapper(gym.ObservationWrapper):
         self.height = FRAME_HEIGHT
         self.observation_space = gym.spaces.Box(low = 0,
                                                 high = 255,
-                                                shape = (self.height, self.width, 1),
+                                                shape = (self.height, self.width),
                                                 dtype = np.uint8)
 
     def observation(self, frame):
         frame = cv2.resize(frame, (self.width, self.height), interpolation = cv2.INTER_CUBIC)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return frame[:, :, np.newaxis]
+        return frame
 
 
 class Method_Wrapper(gym.Wrapper):
