@@ -1,16 +1,29 @@
-# This is a sample Python script.
-
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+import super_mario_bros_env
+import ray
+import os
 
 
-# Press the green button in the gutter to run the script.
+ray.init(num_cpus = os.cpu_count())
+
+
+@ray.remote
+class Player():
+    def __init__(self, level=0):
+        self.env = super_mario_bros_env.make(level)
+
+    def play(self):
+        state = self.env.reset()
+        while True:
+            a = self.env.action_space.sample()
+            state, x, done, info = self.env.step(a)
+            if done:
+                break
+        return x
+
+
 if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    players = [Player.remote() for i in range(4)]
+    x = []
+    for p in players:
+        x.append(p.play.remote())
+    print(ray.get(x))
