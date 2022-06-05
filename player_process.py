@@ -46,19 +46,6 @@ def player_process(child_con, epsilon, level=0):
     tf.config.set_visible_devices([], 'GPU')
     np.random.seed(int.from_bytes(os.urandom(4), byteorder='little'))
 
-    def choose_action(state, past_action):
-        s = np.expand_dims(state.copy().astype(np.float32) / 255., axis=0)
-        pa = np.zeros((1, NUM_ACTIONS), dtype=np.float32)
-        pa[0][past_action] = 1.
-        d = np.array([[discount]])
-        b = np.array([[beta]])
-        q = predictor([s, pa, d, b]).numpy().squeeze()
-        if (np.random.random() < epsilon):
-            a = np.random.randint(NUM_ACTIONS)
-        else:
-            a = np.argmax(q)
-        return a, q
-
     ''' Initialize Predictor and Environment '''
     env = super_mario_bros_env.make(level)
     predictor = create_player_predictor()
@@ -103,7 +90,16 @@ def player_process(child_con, epsilon, level=0):
             env.render()
 
         while True:
-            action, q_value = choose_action(current_state, past_a)
+
+            s = np.expand_dims(current_state.copy().astype(np.float32) / 255., axis=0)
+            pa = np.zeros((1, NUM_ACTIONS), dtype=np.float32)
+            pa[0][past_a] = 1.
+            q_value = predictor([s, pa, np.array([[discount]]), np.array([[beta]])]).numpy().squeeze()
+            if (np.random.random() < epsilon) or (num_games < PLAYER_WARM_UP):
+                action = np.random.randint(NUM_ACTIONS)
+            else:
+                action = np.argmax(q_value)
+
             next_state, x, done, info = env.step(action)
             if RENDER:
                 env.render()

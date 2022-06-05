@@ -71,6 +71,21 @@ class Trainer:
                     self.connections[i].send(weights)
             i = (i + 1) % NUM_PLAYERS
 
+    def train(self):
+        while len(self.actions) < WARM_UP:
+            time.sleep(5)
+        while True:
+            self.memory_lock.acquire()
+            td_array = np.array(self.tds)
+            td_prob = td_array / np.sum(td_array)
+            num_td = td_prob.shape[0]
+            batch_indices = np.random.choice(num_td, BATCH_SIZE, p = td_prob, replace = False)
+            batch = []
+            for idx in batch_indices:
+                batch.append(self.get_batch(idx))
+            self.memory_lock.release()
+
+            weights = (1. - (1. - (1. / num_td)) ** BATCH_SIZE) / (1. - (1. - td_prob) ** BATCH_SIZE)
 
 if __name__ == '__main__':
     players = []
