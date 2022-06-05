@@ -35,6 +35,7 @@ class Trainer:
         self.target = nn.create_target_predictor()
         self.hasher = nn.create_trainer_hasher()
         self.player_hasher = nn.create_player_hasher()
+        self.player_hasher.set_weights(self.hasher.get_weights()[:8])
         self.rnd_net = nn.create_trainer_rnd()
         self.rnd_target = nn.create_target_rnd()
 
@@ -45,6 +46,8 @@ class Trainer:
         self.discounts = []
         self.betas = []
         self.cum_steps = [0]
+
+        self.num_training_episodes = 0
 
     def update_memory(self, batch):
         states, actions, rewards, tds, discount, beta = batch
@@ -350,6 +353,10 @@ class Trainer:
                 self.tds = self.tds[step:]
             self.memory_lock.release()
 
+            self.num_training_episodes += 1
+            if (self.num_training_episodes % UPDATE_TARGET_PERIOD) == 0:
+                self.update_target()
+
 
 if __name__ == '__main__':
     players = []
@@ -367,6 +374,8 @@ if __name__ == '__main__':
         time.sleep(1)
 
     trainer = Trainer(connections)
-    t = threading.Thread(target = trainer.listen)
-    t.start()
-    t.join()
+    listen_thread = threading.Thread(target = trainer.listen)
+    train_thread = threading.Thread(target = trainer.train)
+    listen_thread.start()
+    train_thread.start()
+    listen_thread.join()
