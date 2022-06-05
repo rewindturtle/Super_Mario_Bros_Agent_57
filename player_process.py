@@ -1,4 +1,5 @@
 from Hyperparameters import *
+import Neural_Networks as nn
 import super_mario_bros_env
 import numpy as np
 import os
@@ -15,7 +16,7 @@ def h_inv(x):
     return np.sign(x) * (f1 + f2)
 
 
-def get_reward(x, past_x):
+def get_external_reward(x, past_x):
     if x == -1:
         return -2.
     elif x == -2:
@@ -41,14 +42,16 @@ def get_d_and_b(dm, ds, bm, bs):
 
 
 def player_process(child_con, epsilon, level=0):
-    from Neural_Networks import create_player_predictor
     import tensorflow as tf
     tf.config.set_visible_devices([], 'GPU')
     np.random.seed(int.from_bytes(os.urandom(4), byteorder='little'))
 
     ''' Initialize Predictor and Environment '''
     env = super_mario_bros_env.make(level)
-    predictor = create_player_predictor()
+    predictor = nn.create_player_predictor()
+    hasher = nn.create_player_hasher()
+    rnd_net = nn.create_player_rnd()
+    rnd_target = nn.create_target_rnd()
     child_con.send(('weights', None))
     weights = child_con.recv()
     predictor.set_weights(weights)
@@ -75,7 +78,7 @@ def player_process(child_con, epsilon, level=0):
 
         states = []
         actions = []
-        rewards = []
+        external_rewards = []
         dones = []
         q_values = []
 
@@ -103,19 +106,18 @@ def player_process(child_con, epsilon, level=0):
             next_state, x, done, info = env.step(action)
             if RENDER:
                 env.render()
-            reward = get_reward(x, past_x)
+            external_reward = get_external_reward(x, past_x)
             steps += 1
-            total_reward += reward
+            total_reward += external_reward
 
             states.append(current_state)
             actions.append(action)
-            rewards.append(reward)
+            external_rewards.append(external_reward)
             dones.append(done)
             q_values.append(q_value)
 
             if done:
                 q_values.append(np.zeros(NUM_ACTIONS))
-                total_rewards.append(total_reward)
                 num_games += 1
                 break
 
@@ -123,14 +125,44 @@ def player_process(child_con, epsilon, level=0):
             past_x = x
             past_a = action
 
+        s_array = np.array(states).astype(np.float32) / 255.
+        s_array = s_array[1:, :, :]
+        hash = hasher(s_array).numpy()
+        rnd = rnd_net(s_array).numpy()
+        rnd_t = rnd_target(s_array).numpy()
+        dists = np.zeros((hash.shape[0], NEAREST_NEIGHBOURS))
+        for i in range(hash.shape[0]):
+            nearest_neighbours = []
+            for j in range(hash.shape[0]):
+                if i != j:
+                    dist = np.linalg.norm(hash[i, ...] - hash[j, ...]) ** 2
+                    nearest_neighbours.append(dist)
+                    nearest_neighbours.sort()
+                    if len(nearest_neighbours) > NEAREST_NEIGHBOURS:
+                        nearest_neighbours = nearest_neighbours[:NEAREST_NEIGHBOURS]
+            dists[i, :] = nearest_neighbours
+        dists = dists / max(np.mean(dists), 1e-9)
+        dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
+        kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
+        score = np.sqrt(np.sum(kernel, axis = 1)) + KERNEL_CONSTANT
+        rt = np.where(score > KERNEL_MAX_SCORE, 0, 1. / score)
+        err = np.linalg.norm(rnd - rnd_t, axis = 1) ** 2
+        err_mean = np.mean(err)
+        err_std = max(np.std(err), 1e-9)
+        rnd_alpha = 1. + (err - err_mean) / err_std
+        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND)
+        internal_rewards = np.append(internal_rewards, 0.)
+
+        total_rewards.append(total_reward + beta * np.sum(internal_rewards))
+
         dis = DISCOUNT ** discount
         tds = []
-        for i in range(len(rewards)):
-            td = abs(h(rewards[i] + dis * h_inv(np.max(q_values[i + 1]))) - q_values[i][actions[i]])
+        for i in range(len(external_rewards)):
+            td = abs(h(external_rewards[i] + beta * internal_rewards[i] + dis * h_inv(np.max(q_values[i + 1]))) - q_values[i][actions[i]])
             td = (td ** PER_ALPHA) + PER_EPSILON
             tds.append(td)
 
-        batch = [states, actions, rewards, dones, tds, discount, beta]
+        batch = [states, actions, external_rewards, dones, tds, discount, beta]
         child_con.send(('batch', batch))
 
         if len(total_rewards) == ARM_EPISODE_LEN:
