@@ -127,9 +127,8 @@ def create_player_predictor():
     inner1 = create_inner_player_predictor()([frame_input, action_input, discount_input])
     inner2 = create_inner_player_predictor()([frame_input, action_input, discount_input])
     q = Lambda(combine_q)([inner1, inner2, beta_input])
-    action_output = K.argmax(q, axis = -1)
     model = Model([frame_input, action_input, discount_input, beta_input],
-                  action_output)
+                  q)
     if PRINT_SUMMARY:
         print(model.summary())
     return model

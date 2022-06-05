@@ -4,11 +4,22 @@ import numpy as np
 import os
 
 
+def h(x):
+    return np.sign(x) * (np.sqrt(abs(x) + 1.) - 1.) + SQUISH * x
+
+
+def h_inv(x):
+    arg = 4 * SQUISH * (abs(x) + SQUISH + 1.) + 1.
+    f1 = (1. - np.sqrt(arg)) / (2. * (SQUISH ** 2))
+    f2 = (abs(x) + 1) / SQUISH
+    return np.sign(x) * (f1 + f2)
+
+
 def get_reward(x, past_x):
     if x == -1:
-        return -1.
+        return -2.
     elif x == -2:
-        return 1.
+        return 2.
     else:
         return x - past_x
 
@@ -37,10 +48,12 @@ def player_process(child_con, epsilon, level=0):
         pa[0][past_action] = 1.
         d = np.array([[discount]])
         b = np.array([[beta]])
-        a = predictor([s, pa, d, b]).numpy()[0]
+        q = predictor([s, pa, d, b]).numpy().squeeze()
         if (np.random.random() < epsilon):
             a = np.random.randint(NUM_ACTIONS)
-        return a
+        else:
+            a = np.argmax(q)
+        return a, q
 
     ''' Initialize Predictor and Environment '''
     env = super_mario_bros_env.make(level)
@@ -54,36 +67,65 @@ def player_process(child_con, epsilon, level=0):
 
     discounts = []
     betas = []
-    rewards = []
+    total_rewards = []
 
     ''' Play Game '''
     while True:
         predictor.reset_states()
-        state = env.reset()
 
         discount, beta = get_d_and_b(discount_mean, discount_std, beta_mean, beta_std)
         discounts.append(discount)
         betas.append(beta)
 
+        states = []
+        actions = []
+        rewards = []
+        dones = []
+        q_values = []
+
+        steps = 0
+        total_reward = 0.
+
         past_x = 40. / 18.
         past_a = 0
 
+        current_state = env.reset()
         if RENDER:
             env.render()
+
         while True:
-            a = choose_action(state, past_a)
-            state, x, done, info = env.step(a)
-            reward = get_reward(x, past_x)
-            rewards.append(reward)
+            action, q_value = choose_action(current_state, past_a)
+            next_state, x, done, info = env.step(action)
             if RENDER:
                 env.render()
-            if done:
-                break
-            past_x = x
-            past_a = a
+            reward = get_reward(x, past_x)
+            steps += 1
+            total_reward += reward
 
-        if len(rewards) > ARM_EPISODE_LEN:
-            best_idx = np.argsort(rewards)[-BEST_ARM:]
+            states.append(current_state)
+            actions.append(action)
+            rewards.append(reward)
+            dones.append(done)
+            q_values.append(q_value)
+
+            if done:
+                q_values.append(np.zeros(NUM_ACTIONS))
+                total_rewards.append(total_reward)
+                break
+
+            current_state = next_state.copy()
+            past_x = x
+            past_a = action
+
+        dis = MIN_DISCOUNT ** discount
+        tds = []
+        for i in range(len(rewards)):
+            td = abs(h(rewards[i] + dis * h_inv(np.max(q_values[i + 1]))) - q_values[i][actions[i]])
+            td = (td ** PER_ALPHA) + PER_EPSILON
+            tds.append(td)
+
+        if len(total_rewards) == ARM_EPISODE_LEN:
+            best_idx = np.argsort(total_rewards)[-BEST_ARM:]
             best_discounts = np.array(discounts)[best_idx]
             best_betas = np.array(betas)[best_idx]
 
@@ -95,4 +137,4 @@ def player_process(child_con, epsilon, level=0):
 
             discounts = []
             betas = []
-            rewards = []
+            total_rewards = []
