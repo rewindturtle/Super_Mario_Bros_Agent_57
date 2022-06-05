@@ -18,6 +18,7 @@ def h(input_layer):
 
 
 def h_inv(input_layer):
+    input_layer = K.clip(input_layer, -Q_CLIP, Q_CLIP)
     arg = 4 * SQUISH * (K.abs(input_layer) + SQUISH + 1) + 1
     f1 = (1 - K.sqrt(arg)) / (2 * (SQUISH ** 2))
     f2 = (K.abs(input_layer) + 1) / SQUISH
@@ -267,9 +268,11 @@ def create_target_rnd():
 
 def create_trainer_rnd():
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
-    rnd = create_player_rnd()(frame_input)
+    conv = create_conv_input()(frame_input)
+    dense = Dense(NUM_DENSE // 2,
+                  kernel_initializer = 'he_uniform')(conv)
     model = Model(frame_input,
-                  rnd)
+                  dense)
     model.compile(optimizer = Adam(learning_rate = RND_LR, clipnorm = CLIP_NORM),
                   loss = Huber())
     if PRINT_SUMMARY:

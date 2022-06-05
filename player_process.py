@@ -10,6 +10,7 @@ def h(x):
 
 
 def h_inv(x):
+    x = np.clip(x, -Q_CLIP, Q_CLIP)
     arg = 4 * SQUISH * (abs(x) + SQUISH + 1.) + 1.
     f1 = (1. - np.sqrt(arg)) / (2. * (SQUISH ** 2))
     f2 = (abs(x) + 1) / SQUISH
@@ -132,17 +133,11 @@ def player_process(child_con, epsilon, level=0):
         hash = hasher(s_array).numpy()
         rnd = rnd_net(s_array[1:, ...]).numpy()
         rnd_t = rnd_target(s_array[1:, ...]).numpy()
-        dists = np.zeros((hash.shape[0] - 1, NEAREST_NEIGHBOURS))
-        for i in range(1, hash.shape[0]):
-            nearest_neighbours = []
-            for j in range(hash.shape[0]):
-                if i != j:
-                    dist = np.linalg.norm(hash[i, ...] - hash[j, ...]) ** 2
-                    nearest_neighbours.append(dist)
-                    nearest_neighbours.sort()
-                    if len(nearest_neighbours) > NEAREST_NEIGHBOURS:
-                        nearest_neighbours = nearest_neighbours[:NEAREST_NEIGHBOURS]
-            dists[i - 1, :] = nearest_neighbours
+        h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis=0)
+        h2 = np.tile(hash.copy(), (hash.shape[0] - 1, 1))
+        h3 = np.linalg.norm(h1 - h2, axis=1) ** 2
+        h3 = np.reshape(h3[np.newaxis, :], (hash.shape[0] - 1, hash.shape[0]))
+        dists = np.sort(h3, axis=1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
         dists = dists / max(np.mean(dists), 1e-9)
         dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
         kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)

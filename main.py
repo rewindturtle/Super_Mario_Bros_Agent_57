@@ -5,6 +5,7 @@ import multiprocessing as mp
 import threading
 import numpy as np
 import time
+from timeit import default_timer as timer
 
 
 def get_epsilon(num):
@@ -19,6 +20,7 @@ def h(x):
 
 
 def h_inv(x):
+    x = np.clip(x, -Q_CLIP, Q_CLIP)
     arg = 4 * SQUISH * (abs(x) + SQUISH + 1.) + 1.
     f1 = (1. - np.sqrt(arg)) / (2. * (SQUISH ** 2))
     f2 = (abs(x) + 1) / SQUISH
@@ -60,6 +62,7 @@ class Trainer:
         self.discounts.append(discount)
         self.betas.append(beta)
         self.cum_steps.append(self.cum_steps[-1] + sz)
+        print(len(self.actions))
         self.memory_lock.release()
 
     def update_target(self):
@@ -111,10 +114,10 @@ class Trainer:
         episode_states = np.array(self.states[idx_start:idx_end]).astype(np.float32) / 255.
         episode_actions = np.array(self.actions[idx_start:idx_end])
 
-        current_state = episode_states[idx_start:(idx + 1), ...].copy()
-        next_state = episode_states[idx_start:min(idx + 2, idx_end), ...].copy()
-        n_state = episode_states[idx_start:min(idx + N_STEP + 1, idx_end), ...].copy()
-
+        diff = idx + 1 - idx_start
+        current_state = episode_states[:diff, :, :].copy()
+        next_state = episode_states[:min(diff + 1, idx_end - idx_start), :, :].copy()
+        n_state = episode_states[:min(diff + N_STEP, idx_end - idx_start), :, :].copy()
         state_len = current_state.shape[0]
         next_state_len = next_state.shape[0]
         n_state_len = n_state.shape[0]
@@ -123,7 +126,7 @@ class Trainer:
         past_actions[range(1, state_len), episode_actions[:state_len - 1]] = 1.
         next_past_actions = np.zeros((next_state_len, NUM_ACTIONS), dtype = np.float32)
         next_past_actions[range(1, next_state_len), episode_actions[:next_state_len - 1]] = 1.
-        n_past_actions = np.zeros((n_state_len, NUM_ACTIONS), dtype=np.float32)
+        n_past_actions = np.zeros((n_state_len, NUM_ACTIONS), dtype = np.float32)
         n_past_actions[range(1, n_state_len), episode_actions[:n_state_len - 1]] = 1.
 
         action = self.actions[idx]
@@ -138,21 +141,15 @@ class Trainer:
 
         self.network_lock.acquire()
         hash = self.player_hasher(episode_states).numpy()
-        rnd = self.rnd_net(episode_states[1, ...]).numpy()
-        rnd_t = self.rnd_target(episode_states[1, ...]).numpy()
+        rnd = self.rnd_net(episode_states[1:, :, :]).numpy()
+        rnd_t = self.rnd_target(episode_states[1:, :, :]).numpy()
         self.network_lock.release()
 
-        dists = np.zeros((hash.shape[0] - 1, NEAREST_NEIGHBOURS))
-        for i in range(1, hash.shape[0]):
-            nearest_neighbours = []
-            for j in range(hash.shape[0]):
-                if i != j:
-                    dist = np.linalg.norm(hash[i, ...] - hash[j, ...]) ** 2
-                    nearest_neighbours.append(dist)
-                    nearest_neighbours.sort()
-                    if len(nearest_neighbours) > NEAREST_NEIGHBOURS:
-                        nearest_neighbours = nearest_neighbours[:NEAREST_NEIGHBOURS]
-            dists[i - 1, :] = nearest_neighbours
+        h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis = 0)
+        h2 = np.tile(hash.copy(), (hash.shape[0] - 1, 1))
+        h3 = np.linalg.norm(h1 - h2, axis = 1) ** 2
+        h3 = np.reshape(h3[np.newaxis, :], (hash.shape[0] - 1, hash.shape[0]))
+        dists = np.sort(h3, axis = 1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
         dists = dists / max(np.mean(dists), 1e-9)
         dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
         kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
@@ -183,6 +180,7 @@ class Trainer:
     def train(self):
         while len(self.actions) < WARM_UP:
             time.sleep(5)
+        print('Training Started')
         while True:
             current_states = []
             past_actions = []
