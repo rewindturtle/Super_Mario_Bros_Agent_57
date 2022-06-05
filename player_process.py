@@ -52,9 +52,13 @@ def player_process(child_con, epsilon, level=0):
     hasher = nn.create_player_hasher()
     rnd_net = nn.create_player_rnd()
     rnd_target = nn.create_target_rnd()
-    child_con.send(('weights', None))
+
+    child_con.send(('initialize', None))
     weights = child_con.recv()
-    predictor.set_weights(weights)
+    predictor.set_weights(weights[0])
+    hasher.set_weights(weights[1])
+    rnd_net.set_weights(weights[2])
+    rnd_target.set_weights(weights[3])
 
     discount_mean = (1. - MIN_DISCOUNT) / 2.
     discount_std = (1. - MIN_DISCOUNT) / 2.
@@ -79,14 +83,13 @@ def player_process(child_con, epsilon, level=0):
         states = []
         actions = []
         external_rewards = []
-        dones = []
         q_values = []
 
         steps = 0
         total_reward = 0.
 
         past_x = 40.
-        past_a = 0
+        past_a = -1
 
         current_state = env.reset()
         if RENDER:
@@ -96,7 +99,8 @@ def player_process(child_con, epsilon, level=0):
 
             s = np.expand_dims(current_state.copy().astype(np.float32) / 255., axis=0)
             pa = np.zeros((1, NUM_ACTIONS), dtype=np.float32)
-            pa[0][past_a] = 1.
+            if past_a > -1:
+                pa[0][past_a] = 1.
             q_value = predictor([s, pa, np.array([[discount]]), np.array([[beta]])]).numpy().squeeze()
             if (np.random.random() < epsilon) or (num_games < PLAYER_WARM_UP):
                 action = np.random.randint(NUM_ACTIONS)
@@ -113,7 +117,6 @@ def player_process(child_con, epsilon, level=0):
             states.append(current_state)
             actions.append(action)
             external_rewards.append(external_reward)
-            dones.append(done)
             q_values.append(q_value)
 
             if done:
@@ -161,7 +164,7 @@ def player_process(child_con, epsilon, level=0):
             td = (td ** PER_ALPHA) + PER_EPSILON
             tds.append(td)
 
-        batch = [states, actions, external_rewards, dones, tds, discount, beta]
+        batch = [states, actions, external_rewards, tds, discount, beta]
         child_con.send(('batch', batch))
 
         if len(total_rewards) == ARM_EPISODE_LEN:
@@ -182,4 +185,6 @@ def player_process(child_con, epsilon, level=0):
         if (num_games % UPDATE_PLAYER_PERIOD) == 0:
             child_con.send(('weights', None))
             weights = child_con.recv()
-            predictor.set_weights(weights)
+            predictor.set_weights(weights[0])
+            hasher.set_weights(weights[1])
+            rnd_net.set_weights(weights[2])

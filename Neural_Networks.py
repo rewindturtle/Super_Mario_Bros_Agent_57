@@ -57,7 +57,7 @@ def create_conv_input():
 
 
 def create_time_dist_conv_input():
-    frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
+    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
     frame_exp = K.expand_dims(frame_input, axis = -1)
     conv1 = TimeDistributed(Conv2D(16,
                                    kernel_size = (9, 9),
@@ -90,7 +90,10 @@ def create_inner_player_predictor():
                 kernel_initializer = 'he_uniform',
                 activation = 'relu',
                 stateful = True)(conc1_exp)
-    conc2 = Concatenate()([lstm, discount_input])
+    dense_j = Dense(NUM_DENSE // 2,
+                    kernel_initializer = 'he_uniform',
+                    activation = 'relu',)(discount_input)
+    conc2 = Concatenate()([lstm, dense_j])
     dense1 = Dense(NUM_DENSE,
                    kernel_initializer = 'he_uniform',
                    activation = 'relu')(conc2)
@@ -125,8 +128,8 @@ def create_player_predictor():
 
 
 def create_inner_trainer_predictor():
-    frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = (NUM_LSTM_FRAMES, NUM_ACTIONS))
+    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
+    action_input = Input(shape = (None, NUM_ACTIONS))
     discount_input = Input(shape = 1)
     conv = create_time_dist_conv_input()(frame_input)
     conc1 = TimeDistributed(Concatenate())([conv, action_input])
@@ -134,7 +137,10 @@ def create_inner_trainer_predictor():
                 kernel_initializer = 'he_uniform',
                 activation = 'relu',
                 stateful = False)(conc1)
-    conc2 = Concatenate()([lstm, discount_input])
+    dense_j = Dense(NUM_DENSE // 2,
+                    kernel_initializer='he_uniform',
+                    activation='relu', )(discount_input)
+    conc2 = Concatenate()([lstm, dense_j])
     dense1 = Dense(NUM_DENSE,
                    kernel_initializer = 'he_uniform',
                    activation = 'relu')(conc2)
@@ -154,8 +160,8 @@ def create_inner_trainer_predictor():
 
 
 def create_trainer_predictor():
-    frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = (NUM_LSTM_FRAMES, NUM_ACTIONS))
+    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
+    action_input = Input(shape = (None, NUM_ACTIONS))
     discount_input = Input(shape = 1)
     inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
     inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
@@ -169,8 +175,8 @@ def create_trainer_predictor():
 
 
 def create_target_predictor():
-    frame_input = Input(shape = (NUM_LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = (NUM_LSTM_FRAMES, NUM_ACTIONS))
+    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
+    action_input = Input(shape = (None, NUM_ACTIONS))
     discount_input = Input(shape = 1)
     beta_input = Input(shape = 1)
     inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
