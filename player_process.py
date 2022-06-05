@@ -126,12 +126,11 @@ def player_process(child_con, epsilon, level=0):
             past_a = action
 
         s_array = np.array(states).astype(np.float32) / 255.
-        s_array = s_array[1:, :, :]
         hash = hasher(s_array).numpy()
-        rnd = rnd_net(s_array).numpy()
-        rnd_t = rnd_target(s_array).numpy()
-        dists = np.zeros((hash.shape[0], NEAREST_NEIGHBOURS))
-        for i in range(hash.shape[0]):
+        rnd = rnd_net(s_array[1:, ...]).numpy()
+        rnd_t = rnd_target(s_array[1:, ...]).numpy()
+        dists = np.zeros((hash.shape[0] - 1, NEAREST_NEIGHBOURS))
+        for i in range(1, hash.shape[0]):
             nearest_neighbours = []
             for j in range(hash.shape[0]):
                 if i != j:
@@ -140,7 +139,7 @@ def player_process(child_con, epsilon, level=0):
                     nearest_neighbours.sort()
                     if len(nearest_neighbours) > NEAREST_NEIGHBOURS:
                         nearest_neighbours = nearest_neighbours[:NEAREST_NEIGHBOURS]
-            dists[i, :] = nearest_neighbours
+            dists[i - 1, :] = nearest_neighbours
         dists = dists / max(np.mean(dists), 1e-9)
         dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
         kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
