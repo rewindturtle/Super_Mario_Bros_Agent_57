@@ -21,7 +21,11 @@ def get_reward(x, past_x):
     elif x == -2:
         return 2.
     else:
-        return x - past_x
+        reward = (x - past_x) / 18.
+        if abs(reward) > 1.:
+            return 0.
+        else:
+            return reward
 
 
 def get_d_and_b(dm, ds, bm, bs):
@@ -58,6 +62,9 @@ def player_process(child_con, epsilon, level=0):
     ''' Initialize Predictor and Environment '''
     env = super_mario_bros_env.make(level)
     predictor = create_player_predictor()
+    child_con.send(('weights', None))
+    weights = child_con.recv()
+    predictor.set_weights(weights)
 
     discount_mean = (1. - MIN_DISCOUNT) / 2.
     discount_std = (1. - MIN_DISCOUNT) / 2.
@@ -68,6 +75,8 @@ def player_process(child_con, epsilon, level=0):
     discounts = []
     betas = []
     total_rewards = []
+
+    num_games = 0
 
     ''' Play Game '''
     while True:
@@ -86,7 +95,7 @@ def player_process(child_con, epsilon, level=0):
         steps = 0
         total_reward = 0.
 
-        past_x = 40. / 18.
+        past_x = 40.
         past_a = 0
 
         current_state = env.reset()
@@ -111,18 +120,22 @@ def player_process(child_con, epsilon, level=0):
             if done:
                 q_values.append(np.zeros(NUM_ACTIONS))
                 total_rewards.append(total_reward)
+                num_games += 1
                 break
 
             current_state = next_state.copy()
             past_x = x
             past_a = action
 
-        dis = MIN_DISCOUNT ** discount
+        dis = DISCOUNT ** discount
         tds = []
         for i in range(len(rewards)):
             td = abs(h(rewards[i] + dis * h_inv(np.max(q_values[i + 1]))) - q_values[i][actions[i]])
             td = (td ** PER_ALPHA) + PER_EPSILON
             tds.append(td)
+
+        batch = [states, actions, rewards, dones, tds, discount, beta]
+        child_con.send(('batch', batch))
 
         if len(total_rewards) == ARM_EPISODE_LEN:
             best_idx = np.argsort(total_rewards)[-BEST_ARM:]
@@ -138,3 +151,8 @@ def player_process(child_con, epsilon, level=0):
             discounts = []
             betas = []
             total_rewards = []
+
+        if (num_games % UPDATE_PLAYER_PERIOD) == 0:
+            child_con.send(('weights', None))
+            weights = child_con.recv()
+            predictor.set_weights(weights)

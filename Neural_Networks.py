@@ -117,7 +117,6 @@ def create_inner_player_predictor():
 
 
 def create_player_predictor():
-    import tensorflow.keras.backend as K
     from tensorflow.keras.models import Model
     from tensorflow.keras.layers import Input, Lambda
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))

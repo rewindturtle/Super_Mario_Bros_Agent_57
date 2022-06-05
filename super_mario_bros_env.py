@@ -70,9 +70,9 @@ class Method_Wrapper(gym.Wrapper):
         if (info["lives"] < 2):
             x = -1.
         elif (info["level"] > self.level):
-            x = -2
+            x = -2.
         else:
-            x = (256. * float(info["x1"]) + float(info["x2"])) / 18.
+            x = 256. * float(info["x1"]) + float(info["x2"])
         return state, x, done, info
 
 
