@@ -112,22 +112,35 @@ class Trainer:
                 break
 
         episode_states = np.array(self.states[idx_start:idx_end]).astype(np.float32) / 255.
-        episode_actions = np.array(self.actions[idx_start:idx_end])
+        episode_action_idx = np.array(self.actions[idx_start:idx_end - 1])
+        episode_past_actions = np.zeros((episode_states.shape[0], NUM_ACTIONS), dtype = np.float32)
+        episode_past_actions[range(1, episode_past_actions.shape[0]), episode_action_idx] = 1.
 
-        diff = idx + 1 - idx_start
-        current_state = episode_states[:diff, :, :].copy()
-        next_state = episode_states[:min(diff + 1, idx_end - idx_start), :, :].copy()
-        n_state = episode_states[:min(diff + N_STEP, idx_end - idx_start), :, :].copy()
-        state_len = current_state.shape[0]
-        next_state_len = next_state.shape[0]
-        n_state_len = n_state.shape[0]
+        current_state = np.zeros((LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        next_state = np.zeros((LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        n_state = np.zeros((LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype=np.float32)
 
-        past_actions = np.zeros((state_len, NUM_ACTIONS), dtype = np.float32)
-        past_actions[range(1, state_len), episode_actions[:state_len - 1]] = 1.
-        next_past_actions = np.zeros((next_state_len, NUM_ACTIONS), dtype = np.float32)
-        next_past_actions[range(1, next_state_len), episode_actions[:next_state_len - 1]] = 1.
-        n_past_actions = np.zeros((n_state_len, NUM_ACTIONS), dtype = np.float32)
-        n_past_actions[range(1, n_state_len), episode_actions[:n_state_len - 1]] = 1.
+        past_actions = np.zeros((LSTM_FRAMES, NUM_ACTIONS), dtype=np.float32)
+        next_past_actions = np.zeros((LSTM_FRAMES, NUM_ACTIONS), dtype=np.float32)
+        n_past_actions = np.zeros((LSTM_FRAMES, NUM_ACTIONS), dtype=np.float32)
+
+        diff = idx - idx_start + 1
+        current_slice = episode_states[max(diff - LSTM_FRAMES, 0):diff, :, :].copy()
+        current_actions = episode_past_actions[max(diff - LSTM_FRAMES, 0):diff, :].copy()
+        current_state[-current_slice.shape[0]:, :, :] = current_slice
+        past_actions[-current_actions.shape[0]:, :] = current_actions
+
+        d_next = min(diff + 1, idx_end - idx_start)
+        next_slice = episode_states[max(d_next - LSTM_FRAMES, 0):d_next, :, :].copy()
+        next_actions = episode_past_actions[max(d_next - LSTM_FRAMES, 0):d_next, :].copy()
+        next_state[-next_slice.shape[0]:, :, :] = next_slice
+        next_past_actions[-next_actions.shape[0]:, :] = next_actions
+
+        d_n = min(diff + N_STEP, idx_end - idx_start)
+        n_slice = episode_states[max(d_n - LSTM_FRAMES, 0):d_n, :, :].copy()
+        n_actions = episode_past_actions[max(d_n - LSTM_FRAMES, 0):d_n, :].copy()
+        n_state[-n_slice.shape[0]:, :, :] = n_slice
+        n_past_actions[-n_actions.shape[0]:, :] = n_actions
 
         action = self.actions[idx]
         done = ((idx + 1) == idx_end)
@@ -182,6 +195,7 @@ class Trainer:
             time.sleep(5)
         print('Training Started')
         while True:
+            start = timer()
             current_states = []
             past_actions = []
             actions = []
@@ -228,7 +242,7 @@ class Trainer:
                 next_hash_states.append(batch[17])
             self.memory_lock.release()
 
-            weights = (1. - (1. - (1. / num_td)) ** BATCH_SIZE) / (1. - (1. - td_prob) ** BATCH_SIZE)
+            weights = (1. - (1. - (1. / num_td)) ** BATCH_SIZE) / (1. - (1. - td_prob[batch_indices]) ** BATCH_SIZE)
             softmax_tensor = np.zeros((BATCH_SIZE, NUM_ACTIONS), dtype = np.float32)
 
             max_s1 = 0.
@@ -252,23 +266,6 @@ class Trainer:
             n_tensor = np.array(n_exps).astype(np.float32)
             hash_tensor = np.array(hash_states).astype(np.float32)
             next_hash_tensor = np.array(next_hash_states).astype(np.float32)
-
-            for i in range(BATCH_SIZE):
-                diff_1 = max_s1 - current_states[i].shape[0]
-                diff_2 = max_s2 - next_states[i].shape[0]
-                diff_n = max_sn - n_states[i].shape[0]
-
-                shape_1 = (diff_1, FRAME_HEIGHT, FRAME_WIDTH)
-                shape_2 = (diff_2, FRAME_HEIGHT, FRAME_WIDTH)
-                shape_n = (diff_n, FRAME_HEIGHT, FRAME_WIDTH)
-
-                current_states[i] = np.concatenate((np.zeros(shape_1, dtype = np.float32), current_states[i]))
-                next_states[i] = np.concatenate((np.zeros(shape_2, dtype = np.float32), next_states[i]))
-                n_states[i] = np.concatenate((np.zeros(shape_n, dtype = np.float32), n_states[i]))
-
-                past_actions[i] = np.concatenate((np.zeros((diff_1, NUM_ACTIONS), dtype = np.float32), past_actions[i]))
-                next_past_actions[i] = np.concatenate((np.zeros((diff_2, NUM_ACTIONS), dtype = np.float32), next_past_actions[i]))
-                n_past_actions[i] = np.concatenate((np.zeros((diff_n, NUM_ACTIONS), dtype = np.float32), n_past_actions[i]))
             current_state_tensor = np.array(current_states).astype(np.float32)
             next_state_tensor = np.array(next_states).astype(np.float32)
             n_state_tensor = np.array(n_states).astype(np.float32)
@@ -282,7 +279,7 @@ class Trainer:
             qen, qin, _, _ = self.predictor([n_state_tensor, n_past_action_tensor, discount_tensor])
             qt2 = self.target([next_state_tensor, next_past_action_tensor, discount_tensor, beta_tensor]).numpy()
             qtn = self.target([n_state_tensor, n_past_action_tensor, discount_tensor, beta_tensor]).numpy()
-            rnd_target = self.rnd_target(current_state_tensor).numpy()
+            rnd_target = self.rnd_target(hash_tensor).numpy()
             self.network_lock.release()
 
             qe = qe.numpy()
@@ -315,7 +312,7 @@ class Trainer:
                             batch_size = BATCH_SIZE,
                             verbose = 0,
                             sample_weight = weights)
-            self.rnd_net.fit([hash_states],
+            self.rnd_net.fit([hash_tensor],
                              [rnd_target],
                              batch_size = BATCH_SIZE,
                              verbose = 0,
@@ -354,6 +351,11 @@ class Trainer:
             self.num_training_episodes += 1
             if (self.num_training_episodes % UPDATE_TARGET_PERIOD) == 0:
                 self.update_target()
+            end = timer()
+            print(' ')
+            print('Time: ', end - start)
+            print('Training Episodes: ', self.num_training_episodes)
+            print(' ')
 
 
 if __name__ == '__main__':
