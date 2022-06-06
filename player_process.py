@@ -42,7 +42,7 @@ def get_d_and_b(dm, ds, bm, bs):
     return dx, bx
 
 
-def player_process(child_con, epsilon, level=0):
+def player_process(child_con, player_num, epsilon, level=0):
     import tensorflow as tf
     tf.config.set_visible_devices([], 'GPU')
     np.random.seed(int.from_bytes(os.urandom(4), byteorder='little'))
@@ -91,6 +91,7 @@ def player_process(child_con, epsilon, level=0):
 
         past_x = 40.
         past_a = -1
+        max_x = 40.
 
         current_state = env.reset()
         if RENDER:
@@ -112,6 +113,7 @@ def player_process(child_con, epsilon, level=0):
             if RENDER:
                 env.render()
             external_reward = get_external_reward(x, past_x)
+            max_x = max(x, max_x)
             steps += 1
             total_reward += external_reward
 
@@ -147,7 +149,7 @@ def player_process(child_con, epsilon, level=0):
         err_mean = np.mean(err)
         err_std = max(np.std(err), 1e-9)
         rnd_alpha = 1. + (err - err_mean) / err_std
-        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND)
+        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / 10.
         internal_rewards = np.append(internal_rewards, 0.)
 
         total_rewards.append(total_reward + beta * np.sum(internal_rewards))
@@ -159,7 +161,8 @@ def player_process(child_con, epsilon, level=0):
             td = (td ** PER_ALPHA) + PER_EPSILON
             tds.append(td)
 
-        batch = [states, actions, external_rewards, tds, discount, beta]
+        data = [player_num, num_games, total_reward, np.sum(internal_rewards), dis, beta, epsilon, steps, max_x]
+        batch = [states, actions, external_rewards, tds, discount, beta, data]
         child_con.send(('batch', batch))
 
         if len(total_rewards) == ARM_EPISODE_LEN:

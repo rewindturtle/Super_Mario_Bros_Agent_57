@@ -32,6 +32,7 @@ class Trainer:
         self.connections = connections
         self.memory_lock = threading.Lock()
         self.network_lock = threading.Lock()
+        self.display_lock = threading.Lock()
 
         self.predictor = nn.create_trainer_predictor()
         self.target = nn.create_target_predictor()
@@ -52,7 +53,7 @@ class Trainer:
         self.num_training_episodes = 0
 
     def update_memory(self, batch):
-        states, actions, rewards, tds, discount, beta = batch
+        states, actions, rewards, tds, discount, beta, data = batch
         self.memory_lock.acquire()
         sz = len(actions)
         self.states = self.states + states
@@ -62,8 +63,34 @@ class Trainer:
         self.discounts.append(discount)
         self.betas.append(beta)
         self.cum_steps.append(self.cum_steps[-1] + sz)
-        print(len(self.actions))
         self.memory_lock.release()
+        self.update_training_data(data)
+
+    def print(self, lines):
+        self.display_lock.acquire()
+        print('--------------------------')
+        for line in lines:
+            print(line)
+        print(' ')
+        self.display_lock.release()
+
+    def update_training_data(self, data):
+        player_num, num_games, total_reward, total_i_reward, dis, beta, epsilon, steps, max_x = data
+        if PRINT_GAME_DATA:
+            lines = []
+            lines.append('Player ' + str(player_num))
+            lines.append('Games Played: ' + str(num_games))
+            lines.append('Total Extrinsic Reward: ' + str(total_reward))
+            lines.append('Total Intrinsic Reward: ' + str(total_i_reward))
+            lines.append('Total Reward: ' + str(total_reward + beta * total_i_reward))
+            lines.append('Discount: ' + str(dis))
+            lines.append('Beta: ' + str(beta))
+            lines.append('Epsilon: ' + str(epsilon))
+            lines.append('Total Steps: ' + str(steps))
+            lines.append('Max X: ' + str(max_x))
+            lines.append('Memory Size: ' + str(len(self.actions)))
+            lines.append('Training Episodes: ' + str(self.num_training_episodes))
+            self.print(lines)
 
     def update_target(self):
         self.network_lock.acquire()
@@ -102,6 +129,7 @@ class Trainer:
                 elif cmd == 'initialize':
                     weights = self.get_initial_weights()
                     self.connections[i].send(weights)
+                time.sleep(0.1)
             i = (i + 1) % NUM_PLAYERS
 
     def get_batch(self, idx):
@@ -172,7 +200,7 @@ class Trainer:
         err_mean = np.mean(err)
         err_std = max(np.std(err), 1e-9)
         rnd_alpha = 1. + (err - err_mean) / err_std
-        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND)
+        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / 10.
         internal_rewards = np.append(internal_rewards, 0.)
 
         external_reward = self.rewards[idx]
@@ -195,7 +223,6 @@ class Trainer:
             time.sleep(5)
         print('Training Started')
         while True:
-            start = timer()
             current_states = []
             past_actions = []
             actions = []
@@ -244,16 +271,6 @@ class Trainer:
 
             weights = (1. - (1. - (1. / num_td)) ** BATCH_SIZE) / (1. - (1. - td_prob[batch_indices]) ** BATCH_SIZE)
             softmax_tensor = np.zeros((BATCH_SIZE, NUM_ACTIONS), dtype = np.float32)
-
-            max_s1 = 0.
-            max_s2 = 0.
-            max_sn = 0.
-            for i in range(BATCH_SIZE):
-                softmax_tensor[i, actions[i]] = 1.
-                max_s1 = max(current_states[i].shape[0], max_s1)
-                max_s2 = max(next_states[i].shape[0], max_s2)
-                max_sn = max(n_states[i].shape[0], max_sn)
-
             a_tensor = np.array(actions).astype(int)
             re_tensor = np.array(external_rewards).astype(np.float32)
             ri_tensor = np.array(internal_rewards).astype(np.float32)
@@ -300,6 +317,7 @@ class Trainer:
             training_qi2[range(BATCH_SIZE), a_tensor] = h(ri_tensor + done_tensor * (DISCOUNT ** discount_tensor) * h_inv(qi2[range(BATCH_SIZE), max_q2]))
             training_qen[range(BATCH_SIZE), a_tensor] = h(n_re_tensor + n_done_tensor * (DISCOUNT ** (n_tensor * discount_tensor)) * h_inv(qen[range(BATCH_SIZE), max_qn]))
             training_qin[range(BATCH_SIZE), a_tensor] = h(n_ri_tensor + n_done_tensor * (DISCOUNT ** (n_tensor * discount_tensor)) * h_inv(qin[range(BATCH_SIZE), max_qn]))
+            softmax_tensor[range(BATCH_SIZE), a_tensor] = 1.
 
             self.network_lock.acquire()
             self.predictor.fit([current_state_tensor, past_action_tensor, discount_tensor],
@@ -351,11 +369,6 @@ class Trainer:
             self.num_training_episodes += 1
             if (self.num_training_episodes % UPDATE_TARGET_PERIOD) == 0:
                 self.update_target()
-            end = timer()
-            print(' ')
-            print('Time: ', end - start)
-            print('Training Episodes: ', self.num_training_episodes)
-            print(' ')
 
 
 if __name__ == '__main__':
@@ -364,8 +377,7 @@ if __name__ == '__main__':
     for i in range(NUM_PLAYERS):
         parent_con, child_con = mp.Pipe()
         epsilon = get_epsilon(i)
-        print(epsilon)
-        process = mp.Process(target = player_process, args = (child_con, epsilon))
+        process = mp.Process(target = player_process, args = (child_con, i, epsilon))
         players.append(process)
         connections.append(parent_con)
 
