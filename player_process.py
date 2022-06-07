@@ -23,7 +23,7 @@ def get_external_reward(x, past_x):
     elif x == -2:
         return 2.
     else:
-        reward = (x - past_x) / EXTERNAL_REWARD_NORM
+        reward = (x - past_x) / EXTRINSIC_REWARD_NORM
         if abs(reward) > 1.:
             return 0.
         else:
@@ -149,7 +149,8 @@ def player_process(child_con, player_num, epsilon, level=0):
         err_mean = np.mean(err)
         err_std = max(np.std(err), 1e-9)
         rnd_alpha = 1. + (err - err_mean) / err_std
-        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTERNAL_REWARD_NORM
+        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTRINSIC_REWARD_NORM
+        internal_rewards = np.clip(internal_rewards, -MAX_INTRINSIC_REWARD, MAX_INTRINSIC_REWARD)
         internal_rewards = np.append(internal_rewards, 0.)
 
         total_rewards.append(total_reward + beta * np.sum(internal_rewards))

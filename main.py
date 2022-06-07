@@ -5,7 +5,7 @@ import multiprocessing as mp
 import threading
 import numpy as np
 import time
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from timeit import default_timer as timer
 
 
@@ -134,8 +134,6 @@ class Trainer:
             i = (i + 1) % NUM_PLAYERS
 
     def get_batch(self, indices):
-        n_internal_rewards = []
-
         actions = np.array([self.actions[i] for i in indices], dtype = int)
         external_rewards = np.array([self.rewards[i] for i in indices], dtype = np.float32)
         hash_states = np.array([self.states[i].copy() for i in indices], dtype = np.float32) / 255.
@@ -147,7 +145,9 @@ class Trainer:
         next_past_actions = np.zeros((BATCH_SIZE, LSTM_FRAMES, NUM_ACTIONS), dtype = np.float32)
         n_past_actions = np.zeros((BATCH_SIZE, LSTM_FRAMES, NUM_ACTIONS), dtype = np.float32)
         n_external_rewards = np.zeros(BATCH_SIZE, dtype = np.float32)
+        n_internal_rewards = np.zeros(BATCH_SIZE, dtype = np.float32)
         internal_rewards = np.zeros(BATCH_SIZE, dtype = np.float32)
+        next_hash_states = np.zeros((BATCH_SIZE, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
 
         i = 0
         ends = np.zeros(BATCH_SIZE, dtype = int)
@@ -155,15 +155,14 @@ class Trainer:
 
         self.network_lock.acquire()
         for idx in indices:
-            ep = bisect_left(self.cum_steps, idx)
-            start = self.cum_steps[ep]
-            end = self.cum_steps[bisect_right(self.cum_steps, idx)]
-
+            ep = bisect_right(self.cum_steps, idx)
+            start = self.cum_steps[ep - 1]
+            end = self.cum_steps[ep]
             ends[i] = end
-            eps[i] = ep
+            eps[i] = ep - 1
 
-            episode_states = np.array(self.states[start:end], dtype = np.float32) / 255.
-            episode_action_idx = np.array(self.actions[start:end - 1])
+            episode_states = np.array(self.states[start:end], dtype = np.float32).copy() / 255.
+            episode_action_idx = np.array(self.actions[start:end - 1], dtype = int)
             episode_past_actions = np.zeros((episode_states.shape[0], NUM_ACTIONS), dtype = np.float32)
             episode_past_actions[range(1, episode_past_actions.shape[0]), episode_action_idx] = 1.
 
@@ -205,14 +204,19 @@ class Trainer:
             err_mean = np.mean(err)
             err_std = max(np.std(err), 1e-9)
             rnd_alpha = 1. + (err - err_mean) / err_std
-            irs = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTERNAL_REWARD_NORM
+            irs = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTRINSIC_REWARD_NORM
+            irs = np.clip(irs, -MAX_INTRINSIC_REWARD, MAX_INTRINSIC_REWARD)
             irs = np.append(irs, 0.)
             internal_rewards[i] = irs[idx - start]
 
             dn = min(idx + N_STEP, end)
-            dis = DISCOUNT ** (self.discounts[ep] * np.arange(dn - idx))
+            dis = DISCOUNT ** (self.discounts[ep - 1] * np.arange(dn - idx))
             n_external_rewards[i] = np.sum(dis * np.array(self.rewards[idx:dn]))
-            n_internal_rewards[i] = np.sum(dis * internal_rewards[idx - start:dn - start])
+            n_internal_rewards[i] = np.sum(dis * irs[(idx - start):(dn - start)])
+
+            if idx + 1 != end:
+                next_hash_states[i, :, :] = self.states[idx + 1].copy().astype(np.float32) / 255.
+
             i += 1
         self.network_lock.release()
 
@@ -220,10 +224,6 @@ class Trainer:
         betas = np.array([self.betas[i] for i in eps], dtype = np.float32)
         dones = ((indices + 1) == ends).astype(np.float32)
         n_dones = ((indices + N_STEP) >= ends).astype(np.float32)
-        next_hash_states = np.zeros((BATCH_SIZE, LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
-        next_hash_states[i, :, :, :] = np.where(indices + 1 == ends,
-                                       next_hash_states[i, :, :, :],
-                                       self.states[indices + 1].copy().astype(np.float32) / 255.)
         return (current_states, past_actions, actions, external_rewards, internal_rewards, next_states,
                 next_past_actions, dones, discounts, betas, n_states, n_past_actions, n_external_rewards,
                 n_internal_rewards, n_dones, hash_states, next_hash_states)
