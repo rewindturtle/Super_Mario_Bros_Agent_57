@@ -291,9 +291,9 @@ class Trainer:
             n_past_action_tensor = np.array(n_past_actions).astype(np.float32)
 
             self.network_lock.acquire()
-            qe, qi, _, _ = self.predictor([current_state_tensor, past_action_tensor, discount_tensor])
-            qe2, qi2, _, _ = self.predictor([next_state_tensor, next_past_action_tensor, discount_tensor])
-            qen, qin, _, _ = self.predictor([n_state_tensor, n_past_action_tensor, discount_tensor])
+            qe, qi, _, _ = self.predictor([current_state_tensor, past_action_tensor, discount_tensor, beta_tensor])
+            qe2, qi2, _, _ = self.predictor([next_state_tensor, next_past_action_tensor, discount_tensor, beta_tensor])
+            qen, qin, _, _ = self.predictor([n_state_tensor, n_past_action_tensor, discount_tensor, beta_tensor])
             qt2 = self.target([next_state_tensor, next_past_action_tensor, discount_tensor, beta_tensor]).numpy()
             qtn = self.target([n_state_tensor, n_past_action_tensor, discount_tensor, beta_tensor]).numpy()
             rnd_target = self.rnd_target(hash_tensor).numpy()
@@ -320,7 +320,7 @@ class Trainer:
             softmax_tensor[range(BATCH_SIZE), a_tensor] = 1.
 
             self.network_lock.acquire()
-            self.predictor.fit([current_state_tensor, past_action_tensor, discount_tensor],
+            self.predictor.fit([current_state_tensor, past_action_tensor, discount_tensor, beta_tensor],
                                [training_qe2, training_qi2, training_qen, training_qin],
                                batch_size = BATCH_SIZE,
                                verbose = 0,
@@ -336,8 +336,8 @@ class Trainer:
                              verbose = 0,
                              sample_weight = weights)
             self.player_hasher.set_weights(self.hasher.get_weights()[:8])
-            qe, qi, _, _ = self.predictor([current_state_tensor, past_action_tensor, discount_tensor])
-            qe2, qi2, _, _ = self.predictor([next_state_tensor, next_past_action_tensor, discount_tensor])
+            qe, qi, _, _ = self.predictor([current_state_tensor, past_action_tensor, discount_tensor, beta_tensor])
+            qe2, qi2, _, _ = self.predictor([next_state_tensor, next_past_action_tensor, discount_tensor, beta_tensor])
             self.network_lock.release()
 
             qe = qe.numpy()

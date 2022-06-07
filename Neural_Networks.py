@@ -84,6 +84,7 @@ def create_inner_player_predictor():
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = NUM_ACTIONS)
     discount_input = Input(shape = 1)
+    beta_input = Input(shape = 1)
     conv = create_conv_input()(frame_input)
     conc1 = Concatenate()([conv, action_input])
     conc1_exp = K.expand_dims(conc1, axis = 0)
@@ -91,9 +92,12 @@ def create_inner_player_predictor():
                 kernel_initializer = 'he_uniform',
                 activation = 'relu',
                 stateful = True)(conc1_exp)
+    dis_1 = (discount_input - MIN_DISCOUNT) / (1 - MIN_DISCOUNT)
+    beta_1 = (beta_input - MIN_BETA) / (MAX_BETA - MIN_BETA)
+    conc_3 = Concatenate()([dis_1, beta_1])
     dense_j = Dense(NUM_DENSE // 2,
                     kernel_initializer = 'he_uniform',
-                    activation = 'relu',)(discount_input)
+                    activation = 'relu',)(conc_3)
     conc2 = Concatenate()([lstm, dense_j])
     dense1 = Dense(NUM_DENSE,
                    kernel_initializer = 'he_uniform',
@@ -108,7 +112,7 @@ def create_inner_player_predictor():
                         kernel_initializer = 'he_uniform',
                         activation = 'relu')(dense2)
     duel = Lambda(dueling_output)([state_dense, action_dense])
-    model = Model([frame_input, action_input, discount_input],
+    model = Model([frame_input, action_input, discount_input, beta_input],
                   duel)
     return model
 
@@ -118,8 +122,8 @@ def create_player_predictor():
     action_input = Input(shape = NUM_ACTIONS)
     discount_input = Input(shape = 1)
     beta_input = Input(shape = 1)
-    inner1 = create_inner_player_predictor()([frame_input, action_input, discount_input])
-    inner2 = create_inner_player_predictor()([frame_input, action_input, discount_input])
+    inner1 = create_inner_player_predictor()([frame_input, action_input, discount_input, beta_input])
+    inner2 = create_inner_player_predictor()([frame_input, action_input, discount_input, beta_input])
     q = Lambda(combine_q)([inner1, inner2, beta_input])
     model = Model([frame_input, action_input, discount_input, beta_input],
                   q)
@@ -132,15 +136,19 @@ def create_inner_trainer_predictor():
     frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = (None, NUM_ACTIONS))
     discount_input = Input(shape = 1)
+    beta_input = Input(shape = 1)
     conv = create_time_dist_conv_input()(frame_input)
     conc1 = TimeDistributed(Concatenate())([conv, action_input])
     lstm = LSTM(NUM_DENSE,
                 kernel_initializer = 'he_uniform',
                 activation = 'relu',
                 stateful = False)(conc1)
+    dis_1 = (discount_input - MIN_DISCOUNT) / (1 - MIN_DISCOUNT)
+    beta_1 = (beta_input - MIN_BETA) / (MAX_BETA - MIN_BETA)
+    conc_3 = Concatenate()([dis_1, beta_1])
     dense_j = Dense(NUM_DENSE // 2,
                     kernel_initializer='he_uniform',
-                    activation='relu', )(discount_input)
+                    activation='relu', )(conc_3)
     conc2 = Concatenate()([lstm, dense_j])
     dense1 = Dense(NUM_DENSE,
                    kernel_initializer = 'he_uniform',
@@ -155,7 +163,7 @@ def create_inner_trainer_predictor():
                         kernel_initializer = 'he_uniform',
                         activation = 'relu')(dense2)
     duel = Lambda(dueling_output)([state_dense, action_dense])
-    model = Model([frame_input, action_input, discount_input],
+    model = Model([frame_input, action_input, discount_input, beta_input],
                   duel)
     return model
 
@@ -164,9 +172,10 @@ def create_trainer_predictor():
     frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
     action_input = Input(shape = (None, NUM_ACTIONS))
     discount_input = Input(shape = 1)
-    inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
-    inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
-    model = Model([frame_input, action_input, discount_input],
+    beta_input = Input(shape = 1)
+    inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
+    inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
+    model = Model([frame_input, action_input, discount_input, beta_input],
                   [inner1, inner2, inner1, inner2])
     model.compile(optimizer = Adam(learning_rate = LR, clipnorm = CLIP_NORM),
                   loss = [Huber(), Huber(), Huber(), Huber()])
@@ -180,8 +189,8 @@ def create_target_predictor():
     action_input = Input(shape = (None, NUM_ACTIONS))
     discount_input = Input(shape = 1)
     beta_input = Input(shape = 1)
-    inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
-    inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input])
+    inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
+    inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
     q_output = Lambda(combine_q)([inner1, inner2, beta_input])
     model = Model([frame_input, action_input, discount_input, beta_input],
                   q_output)
