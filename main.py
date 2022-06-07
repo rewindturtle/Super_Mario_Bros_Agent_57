@@ -200,7 +200,7 @@ class Trainer:
         err_mean = np.mean(err)
         err_std = max(np.std(err), 1e-9)
         rnd_alpha = 1. + (err - err_mean) / err_std
-        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / 10.
+        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTERNAL_REWARD_NORM
         internal_rewards = np.append(internal_rewards, 0.)
 
         external_reward = self.rewards[idx]
