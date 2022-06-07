@@ -5,6 +5,7 @@ import multiprocessing as mp
 import threading
 import numpy as np
 import time
+from bisect import bisect_left, bisect_right
 from timeit import default_timer as timer
 
 
@@ -132,163 +133,118 @@ class Trainer:
                 time.sleep(0.1)
             i = (i + 1) % NUM_PLAYERS
 
-    def get_batch(self, idx):
-        for ep in range(1, len(self.cum_steps)):
-            if idx < self.cum_steps[ep]:
-                idx_start = self.cum_steps[ep - 1]
-                idx_end = self.cum_steps[ep]
-                break
+    def get_batch(self, indices):
+        n_internal_rewards = []
 
-        episode_states = np.array(self.states[idx_start:idx_end]).astype(np.float32) / 255.
-        episode_action_idx = np.array(self.actions[idx_start:idx_end - 1])
-        episode_past_actions = np.zeros((episode_states.shape[0], NUM_ACTIONS), dtype = np.float32)
-        episode_past_actions[range(1, episode_past_actions.shape[0]), episode_action_idx] = 1.
+        actions = np.array([self.actions[i] for i in indices], dtype = int)
+        external_rewards = np.array([self.rewards[i] for i in indices], dtype = np.float32)
+        hash_states = np.array([self.states[i].copy() for i in indices], dtype = np.float32) / 255.
 
-        current_state = np.zeros((LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
-        next_state = np.zeros((LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
-        n_state = np.zeros((LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype=np.float32)
+        current_states = np.zeros((BATCH_SIZE, LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        next_states = np.zeros((BATCH_SIZE, LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        n_states = np.zeros((BATCH_SIZE, LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        past_actions = np.zeros((BATCH_SIZE, LSTM_FRAMES, NUM_ACTIONS), dtype = np.float32)
+        next_past_actions = np.zeros((BATCH_SIZE, LSTM_FRAMES, NUM_ACTIONS), dtype = np.float32)
+        n_past_actions = np.zeros((BATCH_SIZE, LSTM_FRAMES, NUM_ACTIONS), dtype = np.float32)
+        n_external_rewards = np.zeros(BATCH_SIZE, dtype = np.float32)
+        internal_rewards = np.zeros(BATCH_SIZE, dtype = np.float32)
 
-        past_actions = np.zeros((LSTM_FRAMES, NUM_ACTIONS), dtype=np.float32)
-        next_past_actions = np.zeros((LSTM_FRAMES, NUM_ACTIONS), dtype=np.float32)
-        n_past_actions = np.zeros((LSTM_FRAMES, NUM_ACTIONS), dtype=np.float32)
-
-        diff = idx - idx_start + 1
-        current_slice = episode_states[max(diff - LSTM_FRAMES, 0):diff, :, :].copy()
-        current_actions = episode_past_actions[max(diff - LSTM_FRAMES, 0):diff, :].copy()
-        current_state[-current_slice.shape[0]:, :, :] = current_slice
-        past_actions[-current_actions.shape[0]:, :] = current_actions
-
-        d_next = min(diff + 1, idx_end - idx_start)
-        next_slice = episode_states[max(d_next - LSTM_FRAMES, 0):d_next, :, :].copy()
-        next_actions = episode_past_actions[max(d_next - LSTM_FRAMES, 0):d_next, :].copy()
-        next_state[-next_slice.shape[0]:, :, :] = next_slice
-        next_past_actions[-next_actions.shape[0]:, :] = next_actions
-
-        d_n = min(diff + N_STEP, idx_end - idx_start)
-        n_slice = episode_states[max(d_n - LSTM_FRAMES, 0):d_n, :, :].copy()
-        n_actions = episode_past_actions[max(d_n - LSTM_FRAMES, 0):d_n, :].copy()
-        n_state[-n_slice.shape[0]:, :, :] = n_slice
-        n_past_actions[-n_actions.shape[0]:, :] = n_actions
-
-        action = self.actions[idx]
-        done = ((idx + 1) == idx_end)
-        discount = self.discounts[ep - 1]
-        beta = self.betas[ep - 1]
-        hash_state = self.states[idx].copy().astype(np.float32) / 255.
-        if (idx + 1) == idx_end:
-            next_hash_state = np.zeros((FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
-        else:
-            next_hash_state = self.states[idx + 1].copy().astype(np.float32) / 255.
+        i = 0
+        ends = np.zeros(BATCH_SIZE, dtype = int)
+        eps = BATCH_SIZE * [0]
 
         self.network_lock.acquire()
-        hash = self.player_hasher(episode_states).numpy()
-        rnd = self.rnd_net(episode_states[1:, :, :]).numpy()
-        rnd_t = self.rnd_target(episode_states[1:, :, :]).numpy()
+        for idx in indices:
+            ep = bisect_left(self.cum_steps, idx)
+            start = self.cum_steps[ep]
+            end = self.cum_steps[bisect_right(self.cum_steps, idx)]
+
+            ends[i] = end
+            eps[i] = ep
+
+            episode_states = np.array(self.states[start:end], dtype = np.float32) / 255.
+            episode_action_idx = np.array(self.actions[start:end - 1])
+            episode_past_actions = np.zeros((episode_states.shape[0], NUM_ACTIONS), dtype = np.float32)
+            episode_past_actions[range(1, episode_past_actions.shape[0]), episode_action_idx] = 1.
+
+            diff = idx - start + 1
+            d_low = max(diff - LSTM_FRAMES, 0)
+            state_slice = episode_states[d_low:diff, :, :].copy()
+            action_slice = episode_past_actions[d_low:diff, :].copy()
+            current_states[i, -state_slice.shape[0]:, :, :] = state_slice
+            past_actions[i, -action_slice.shape[0]:, :] = action_slice
+
+            d_next = min(diff + 1, end - start)
+            d_low = max(d_next - LSTM_FRAMES, 0)
+            state_slice = episode_states[d_low:d_next, :, :].copy()
+            action_slice = episode_past_actions[d_low:d_next, :].copy()
+            next_states[i, -state_slice.shape[0]:, :, :] = state_slice
+            next_past_actions[i, -action_slice.shape[0]:, :] = action_slice
+
+            d_n = min(diff + N_STEP, end - start)
+            d_low = max(d_n - LSTM_FRAMES, 0)
+            state_slice = episode_states[d_low:d_n, :, :].copy()
+            action_slice = episode_past_actions[d_low:d_n, :].copy()
+            n_states[i, -state_slice.shape[0]:, :, :] = state_slice
+            n_past_actions[i, -action_slice.shape[0]:, :] = action_slice
+
+            hash = self.player_hasher(episode_states).numpy()
+            rnd = self.rnd_net(episode_states[1:, :, :]).numpy()
+            rnd_t = self.rnd_target(episode_states[1:, :, :]).numpy()
+            h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis = 0)
+            h2 = np.tile(hash.copy(), (hash.shape[0] - 1, 1))
+            h3 = np.linalg.norm(h1 - h2, axis = 1) ** 2
+            h3 = np.reshape(h3[np.newaxis, :], (hash.shape[0] - 1, hash.shape[0]))
+            dists = np.sort(h3, axis = 1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
+            dists = dists / max(np.mean(dists), 1e-9)
+            dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
+            kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
+            score = np.sqrt(np.sum(kernel, axis = 1)) + KERNEL_CONSTANT
+            rt = np.where(score > KERNEL_MAX_SCORE, 0, 1. / score)
+            err = np.linalg.norm(rnd - rnd_t, axis = 1) ** 2
+            err_mean = np.mean(err)
+            err_std = max(np.std(err), 1e-9)
+            rnd_alpha = 1. + (err - err_mean) / err_std
+            irs = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTERNAL_REWARD_NORM
+            irs = np.append(irs, 0.)
+            internal_rewards[i] = irs[idx - start]
+
+            dn = min(idx + N_STEP, end)
+            dis = DISCOUNT ** (self.discounts[ep] * np.arange(dn - idx))
+            n_external_rewards[i] = np.sum(dis * np.array(self.rewards[idx:dn]))
+            n_internal_rewards[i] = np.sum(dis * internal_rewards[idx - start:dn - start])
+            i += 1
         self.network_lock.release()
 
-        h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis = 0)
-        h2 = np.tile(hash.copy(), (hash.shape[0] - 1, 1))
-        h3 = np.linalg.norm(h1 - h2, axis = 1) ** 2
-        h3 = np.reshape(h3[np.newaxis, :], (hash.shape[0] - 1, hash.shape[0]))
-        dists = np.sort(h3, axis = 1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
-        dists = dists / max(np.mean(dists), 1e-9)
-        dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
-        kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
-        score = np.sqrt(np.sum(kernel, axis=1)) + KERNEL_CONSTANT
-        rt = np.where(score > KERNEL_MAX_SCORE, 0, 1. / score)
-        err = np.linalg.norm(rnd - rnd_t, axis=1) ** 2
-        err_mean = np.mean(err)
-        err_std = max(np.std(err), 1e-9)
-        rnd_alpha = 1. + (err - err_mean) / err_std
-        internal_rewards = rt * np.clip(rnd_alpha, 1., MAX_RND) / INTERNAL_REWARD_NORM
-        internal_rewards = np.append(internal_rewards, 0.)
-
-        external_reward = self.rewards[idx]
-        internal_reward = internal_rewards[idx - idx_start]
-        n_external_reward = 0.
-        n_internal_reward = 0.
-        n_done = False
-        for n in range(N_STEP):
-            n_external_reward += (DISCOUNT ** (n * discount)) * self.rewards[idx + n]
-            n_internal_reward += (DISCOUNT ** (n * discount)) * internal_rewards[idx - idx_start + n]
-            if (idx + n + 1) == idx_end:
-                n_done = True
-                break
-        return [current_state, past_actions, action, external_reward, internal_reward, next_state, next_past_actions,
-                done, discount, beta, n_state, n_past_actions, n_external_reward, n_internal_reward, n_done, n + 1,
-                hash_state, next_hash_state]
+        discounts = np.array([self.discounts[i] for i in eps], dtype = np.float32)
+        betas = np.array([self.betas[i] for i in eps], dtype = np.float32)
+        dones = ((indices + 1) == ends).astype(np.float32)
+        n_dones = ((indices + N_STEP) >= ends).astype(np.float32)
+        next_hash_states = np.zeros((BATCH_SIZE, LSTM_FRAMES, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        next_hash_states[i, :, :, :] = np.where(indices + 1 == ends,
+                                       next_hash_states[i, :, :, :],
+                                       self.states[indices + 1].copy().astype(np.float32) / 255.)
+        return (current_states, past_actions, actions, external_rewards, internal_rewards, next_states,
+                next_past_actions, dones, discounts, betas, n_states, n_past_actions, n_external_rewards,
+                n_internal_rewards, n_dones, hash_states, next_hash_states)
 
     def train(self):
         while len(self.actions) < WARM_UP:
             time.sleep(5)
         print('Training Started')
         while True:
-            current_states = []
-            past_actions = []
-            actions = []
-            external_rewards = []
-            internal_rewards = []
-            next_states = []
-            next_past_actions = []
-            dones = []
-            discounts = []
-            betas = []
-            n_states = []
-            n_past_actions = []
-            n_external_rewards = []
-            n_internal_rewards = []
-            n_dones = []
-            n_exps = []
-            hash_states = []
-            next_hash_states = []
-
             self.memory_lock.acquire()
             td_array = np.array(self.tds)
             td_prob = td_array / np.sum(td_array)
             num_td = td_prob.shape[0]
             batch_indices = np.random.choice(num_td, BATCH_SIZE, p = td_prob, replace = False)
-            for idx in batch_indices:
-                batch = self.get_batch(idx)
-                current_states.append(batch[0])
-                past_actions.append(batch[1])
-                actions.append(batch[2])
-                external_rewards.append(batch[3])
-                internal_rewards.append(batch[4])
-                next_states.append(batch[5])
-                next_past_actions.append(batch[6])
-                dones.append(batch[7])
-                discounts.append(batch[8])
-                betas.append(batch[9])
-                n_states.append(batch[10])
-                n_past_actions.append(batch[11])
-                n_external_rewards.append(batch[12])
-                n_internal_rewards.append(batch[13])
-                n_dones.append(batch[14])
-                n_exps.append(batch[15])
-                hash_states.append(batch[16])
-                next_hash_states.append(batch[17])
+            current_state_tensor, past_action_tensor, a_tensor, re_tensor, ri_tensor, next_state_tensor, \
+            next_past_action_tensor, done_tensor, discount_tensor, beta_tensor, n_state_tensor, n_past_action_tensor, \
+            n_re_tensor, n_ri_tensor, n_done_tensor, hash_tensor, next_hash_tensor = self.get_batch(batch_indices)
             self.memory_lock.release()
 
             weights = (1. - (1. - (1. / num_td)) ** BATCH_SIZE) / (1. - (1. - td_prob[batch_indices]) ** BATCH_SIZE)
             softmax_tensor = np.zeros((BATCH_SIZE, NUM_ACTIONS), dtype = np.float32)
-            a_tensor = np.array(actions).astype(int)
-            re_tensor = np.array(external_rewards).astype(np.float32)
-            ri_tensor = np.array(internal_rewards).astype(np.float32)
-            n_re_tensor = np.array(n_external_rewards).astype(np.float32)
-            n_ri_tensor = np.array(n_internal_rewards).astype(np.float32)
-            done_tensor = np.array(dones).astype(np.float32)
-            n_done_tensor = np.array(n_dones).astype(np.float32)
-            discount_tensor = np.array(discounts).astype(np.float32)
-            beta_tensor = np.array(betas).astype(np.float32)
-            n_tensor = np.array(n_exps).astype(np.float32)
-            hash_tensor = np.array(hash_states).astype(np.float32)
-            next_hash_tensor = np.array(next_hash_states).astype(np.float32)
-            current_state_tensor = np.array(current_states).astype(np.float32)
-            next_state_tensor = np.array(next_states).astype(np.float32)
-            n_state_tensor = np.array(n_states).astype(np.float32)
-            past_action_tensor = np.array(past_actions).astype(np.float32)
-            next_past_action_tensor = np.array(next_past_actions).astype(np.float32)
-            n_past_action_tensor = np.array(n_past_actions).astype(np.float32)
 
             self.network_lock.acquire()
             qe, qi, _, _ = self.predictor([current_state_tensor, past_action_tensor, discount_tensor, beta_tensor])
@@ -315,8 +271,8 @@ class Trainer:
 
             training_qe2[range(BATCH_SIZE), a_tensor] = h(re_tensor + done_tensor * (DISCOUNT ** discount_tensor) * h_inv(qe2[range(BATCH_SIZE), max_q2]))
             training_qi2[range(BATCH_SIZE), a_tensor] = h(ri_tensor + done_tensor * (DISCOUNT ** discount_tensor) * h_inv(qi2[range(BATCH_SIZE), max_q2]))
-            training_qen[range(BATCH_SIZE), a_tensor] = h(n_re_tensor + n_done_tensor * (DISCOUNT ** (n_tensor * discount_tensor)) * h_inv(qen[range(BATCH_SIZE), max_qn]))
-            training_qin[range(BATCH_SIZE), a_tensor] = h(n_ri_tensor + n_done_tensor * (DISCOUNT ** (n_tensor * discount_tensor)) * h_inv(qin[range(BATCH_SIZE), max_qn]))
+            training_qen[range(BATCH_SIZE), a_tensor] = h(n_re_tensor + n_done_tensor * (DISCOUNT ** ((N_STEP + 1) * discount_tensor)) * h_inv(qen[range(BATCH_SIZE), max_qn]))
+            training_qin[range(BATCH_SIZE), a_tensor] = h(n_ri_tensor + n_done_tensor * (DISCOUNT ** ((N_STEP + 1) * discount_tensor)) * h_inv(qin[range(BATCH_SIZE), max_qn]))
             softmax_tensor[range(BATCH_SIZE), a_tensor] = 1.
 
             self.network_lock.acquire()
