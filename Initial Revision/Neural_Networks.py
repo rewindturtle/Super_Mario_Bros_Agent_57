@@ -287,9 +287,3 @@ def create_trainer_rnd():
     if PRINT_SUMMARY:
         print(model.summary())
     return model
-
-
-if __name__ == '__main__':
-    player_predictor = create_player_predictor()
-    trainer_predictor = create_trainer_predictor()
-    target_predictor = create_target_predictor()

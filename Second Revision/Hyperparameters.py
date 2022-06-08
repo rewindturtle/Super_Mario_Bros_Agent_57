@@ -1,3 +1,6 @@
+from numpy import exp, log
+
+
 FRAME_HEIGHT = 81
 FRAME_WIDTH = 81
 FRAME_SKIP = 12
@@ -7,15 +10,27 @@ NUM_ACTIONS = 10
 NUM_PLAYERS = 4
 MAX_EPSILON = 1. / 50.
 MIN_EPSILON = 1. / 1000.
-DISCOUNT = 0.8
-MIN_DISCOUNT = 0.045
-MIN_BETA = 0.
-MAX_BETA = 0.5
-ARM_EPSILON = 0.5
-ARM_EPISODE_LEN = 100
-BEST_ARM = ARM_EPISODE_LEN // 10
-MIN_DISCOUNT_STD = 0.01
-MIN_BETA_STD = 0.01
+
+NUM_ARMS = 32
+MAX_BETA = 0.3
+BETAS = []
+for i in range(NUM_ARMS):
+    if i == 0:
+        BETAS.append(0.)
+    elif i == (NUM_ARMS - 1):
+        BETAS.append(MAX_BETA)
+    else:
+        x = 10 * (2 * i - NUM_ARMS + 2) / (NUM_ARMS - 2)
+        b = MAX_BETA / (1. + exp(-x))
+        BETAS.append(b)
+
+MAX_GAMMA = 0.99
+MIN_GAMMA = 0.85
+GAMMAS = []
+for i in range(NUM_ARMS):
+    x = ((NUM_ARMS - i - 1) * log(1 - MAX_GAMMA) + i * log(1 - MIN_GAMMA)) / (NUM_ARMS - 1)
+    g = 1 - exp(x)
+    GAMMAS.append(g)
 
 
 UPDATE_PLAYER_PERIOD = 100
@@ -25,7 +40,8 @@ SAVE_DATA_PERIOD = 100
 PLAYER_WARM_UP = UPDATE_PLAYER_PERIOD
 
 
-LSTM_FRAMES = 20
+TRACE_LENGTH = 80
+REPLAY_PERIOD = TRACE_LENGTH // 2
 NUM_DENSE = 64
 SQUISH = 0.01
 N_STEP = 10
@@ -56,6 +72,6 @@ KERNEL_MAX_SCORE = 8.
 MAX_RND = 5.
 
 
-PRINT_SUMMARY = False
+PRINT_SUMMARY = True
 PRINT_GAME_DATA = True
 RENDER = True

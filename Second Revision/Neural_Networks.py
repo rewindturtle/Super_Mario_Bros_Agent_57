@@ -4,6 +4,7 @@ from tensorflow.keras.layers import *
 import tensorflow.keras.backend as K
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
+from tensorflow import convert_to_tensor, repeat, one_hot, int64, gather
 
 
 def dueling_output(input_layer):
@@ -29,7 +30,9 @@ def h_inv(input_layer):
 def combine_q(input_layer):
     qe = h_inv(input_layer[0])
     qi = h_inv(input_layer[1])
-    beta = input_layer[2]
+    betas = convert_to_tensor(BETAS)
+    beta = gather(betas, input_layer[2])
+    # beta = K.sum(betas * input_layer[2])
     q = h(qe + beta * qi)
     return q
 
@@ -81,51 +84,51 @@ def create_time_dist_conv_input():
 
 
 def create_inner_player_predictor():
-    frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = NUM_ACTIONS)
-    discount_input = Input(shape = 1)
-    beta_input = Input(shape = 1)
+    frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH), batch_size = 1)
+    past_action_input = Input(shape = 1, dtype = int64, batch_size = 1)
+    arm_input = Input(shape = 1, dtype = int64, batch_size = 1)
+
     conv = create_conv_input()(frame_input)
-    conc1 = Concatenate()([conv, action_input])
-    conc1_exp = K.expand_dims(conc1, axis = 0)
+    a_hot = K.squeeze(one_hot(past_action_input, NUM_ACTIONS), axis = 1)
+    arm_hot = K.squeeze(one_hot(arm_input, NUM_ARMS), axis = 1)
+
+    conc_1 = Concatenate()([conv, a_hot])
+    conc1_exp = K.expand_dims(conc_1, axis = 1)
     lstm = LSTM(NUM_DENSE,
                 kernel_initializer = 'he_uniform',
                 activation = 'relu',
                 stateful = True)(conc1_exp)
-    dis_1 = (discount_input - MIN_DISCOUNT) / (1 - MIN_DISCOUNT)
-    beta_1 = (beta_input - MIN_BETA) / (MAX_BETA - MIN_BETA)
-    conc_3 = Concatenate()([dis_1, beta_1])
-    dense_j = Dense(NUM_DENSE // 2,
+
+    conc_2 = Concatenate()([lstm, arm_hot])
+    dense_1 = Dense(NUM_DENSE,
                     kernel_initializer = 'he_uniform',
-                    activation = 'relu',)(conc_3)
-    conc2 = Concatenate()([lstm, dense_j])
-    dense1 = Dense(NUM_DENSE,
-                   kernel_initializer = 'he_uniform',
-                   activation = 'relu')(conc2)
-    dense2 = Dense(NUM_DENSE,
-                   kernel_initializer = 'he_uniform',
-                   activation = 'relu')(conc2)
+                    activation = 'relu')(conc_2)
+    dense_2 = Dense(NUM_DENSE,
+                    kernel_initializer = 'he_uniform',
+                    activation = 'relu')(conc_2)
     action_dense = Dense(NUM_ACTIONS,
                          kernel_initializer = 'he_uniform',
-                         activation = 'relu')(dense1)
+                         activation = 'relu')(dense_1)
     state_dense = Dense(1,
                         kernel_initializer = 'he_uniform',
-                        activation = 'relu')(dense2)
+                        activation = 'relu')(dense_2)
     duel = Lambda(dueling_output)([state_dense, action_dense])
-    model = Model([frame_input, action_input, discount_input, beta_input],
+    model = Model([frame_input, past_action_input, arm_input],
                   duel)
+    if PRINT_SUMMARY:
+        print(model.summary())
     return model
 
 
 def create_player_predictor():
     frame_input = Input(shape = (FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = NUM_ACTIONS)
-    discount_input = Input(shape = 1)
-    beta_input = Input(shape = 1)
-    inner1 = create_inner_player_predictor()([frame_input, action_input, discount_input, beta_input])
-    inner2 = create_inner_player_predictor()([frame_input, action_input, discount_input, beta_input])
-    q = Lambda(combine_q)([inner1, inner2, beta_input])
-    model = Model([frame_input, action_input, discount_input, beta_input],
+    past_action_input = Input(shape = 1, dtype = int64)
+    arm_input = Input(shape = 1, dtype = int64)
+
+    inner1 = create_inner_player_predictor()([frame_input, past_action_input, arm_input])
+    inner2 = create_inner_player_predictor()([frame_input, past_action_input, arm_input])
+    q = Lambda(combine_q)([inner1, inner2, arm_input])
+    model = Model([frame_input, past_action_input, arm_input],
                   q)
     if PRINT_SUMMARY:
         print(model.summary())
@@ -133,67 +136,71 @@ def create_player_predictor():
 
 
 def create_inner_trainer_predictor():
-    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = (None, NUM_ACTIONS))
-    discount_input = Input(shape = 1)
-    beta_input = Input(shape = 1)
+    frame_input = Input(shape = (TRACE_LENGTH, FRAME_HEIGHT, FRAME_WIDTH))
+    past_action_input = Input(shape = TRACE_LENGTH, dtype = int64)
+    arm_input = Input(shape = 1, dtype = int64)
+
     conv = create_time_dist_conv_input()(frame_input)
-    conc1 = TimeDistributed(Concatenate())([conv, action_input])
+    a_hot = one_hot(past_action_input, NUM_ACTIONS)
+    arm_hot = one_hot(arm_input, NUM_ARMS)
+
+    conc_1 = TimeDistributed(Concatenate())([conv, a_hot])
     lstm = LSTM(NUM_DENSE,
                 kernel_initializer = 'he_uniform',
                 activation = 'relu',
-                stateful = False)(conc1)
-    dis_1 = (discount_input - MIN_DISCOUNT) / (1 - MIN_DISCOUNT)
-    beta_1 = (beta_input - MIN_BETA) / (MAX_BETA - MIN_BETA)
-    conc_3 = Concatenate()([dis_1, beta_1])
-    dense_j = Dense(NUM_DENSE // 2,
-                    kernel_initializer='he_uniform',
-                    activation='relu', )(conc_3)
-    conc2 = Concatenate()([lstm, dense_j])
-    dense1 = Dense(NUM_DENSE,
-                   kernel_initializer = 'he_uniform',
-                   activation = 'relu')(conc2)
-    dense2 = Dense(NUM_DENSE,
-                   kernel_initializer = 'he_uniform',
-                   activation = 'relu')(conc2)
-    action_dense = Dense(NUM_ACTIONS,
-                         kernel_initializer = 'he_uniform',
-                         activation = 'relu')(dense1)
-    state_dense = Dense(1,
-                        kernel_initializer = 'he_uniform',
-                        activation = 'relu')(dense2)
-    duel = Lambda(dueling_output)([state_dense, action_dense])
-    model = Model([frame_input, action_input, discount_input, beta_input],
+                stateful = False,
+                return_sequences = True)(conc_1)
+
+    #arm_exp = K.expand_dims(arm_hot, axis = 0)
+    arm_repeat = repeat(arm_hot, TRACE_LENGTH, axis = 0)
+
+
+    conc_2 = TimeDistributed(Concatenate())([lstm, arm_repeat])
+    dense_1 = TimeDistributed(Dense(NUM_DENSE,
+                                    kernel_initializer = 'he_uniform',
+                                    activation = 'relu'))(conc_2)
+    dense_2 = TimeDistributed(Dense(NUM_DENSE,
+                                    kernel_initializer='he_uniform',
+                                    activation='relu'))(conc_2)
+    action_dense = TimeDistributed(Dense(NUM_ACTIONS,
+                                         kernel_initializer='he_uniform',
+                                         activation='relu'))(dense_1)
+    state_dense = TimeDistributed(Dense(1,
+                                        kernel_initializer = 'he_uniform',
+                                        activation = 'relu'))(dense_2)
+    duel = TimeDistributed(Lambda(dueling_output))([state_dense, action_dense])
+    model = Model([frame_input, past_action_input, arm_input],
                   duel)
+    if PRINT_SUMMARY:
+        print(model.summary())
     return model
 
 
 def create_trainer_predictor():
-    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = (None, NUM_ACTIONS))
-    discount_input = Input(shape = 1)
-    beta_input = Input(shape = 1)
-    inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
-    inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
-    model = Model([frame_input, action_input, discount_input, beta_input],
-                  [inner1, inner2, inner1, inner2])
+    frame_input = Input(shape = (TRACE_LENGTH, FRAME_HEIGHT, FRAME_WIDTH))
+    past_action_input = Input(shape = TRACE_LENGTH, dtype = int64)
+    arm_input = Input(shape = 1, dtype = int64)
+
+    inner1 = create_inner_trainer_predictor()([frame_input, past_action_input, arm_input])
+    inner2 = create_inner_trainer_predictor()([frame_input, past_action_input, arm_input])
+    model = Model([frame_input, past_action_input, arm_input],
+                  [inner1, inner2])
     model.compile(optimizer = Adam(learning_rate = LR, clipnorm = CLIP_NORM),
-                  loss = [Huber(), Huber(), Huber(), Huber()])
+                  loss = [Huber(), Huber()])
     if PRINT_SUMMARY:
         print(model.summary())
     return model
 
 
 def create_target_predictor():
-    frame_input = Input(shape = (None, FRAME_HEIGHT, FRAME_WIDTH))
-    action_input = Input(shape = (None, NUM_ACTIONS))
-    discount_input = Input(shape = 1)
-    beta_input = Input(shape = 1)
-    inner1 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
-    inner2 = create_inner_trainer_predictor()([frame_input, action_input, discount_input, beta_input])
-    q_output = Lambda(combine_q)([inner1, inner2, beta_input])
-    model = Model([frame_input, action_input, discount_input, beta_input],
-                  q_output)
+    frame_input = Input(shape = (TRACE_LENGTH, FRAME_HEIGHT, FRAME_WIDTH))
+    past_action_input = Input(shape = TRACE_LENGTH, dtype = int64)
+    arm_input = Input(shape = 1, dtype = int64)
+
+    inner1 = create_inner_trainer_predictor()([frame_input, past_action_input, arm_input])
+    inner2 = create_inner_trainer_predictor()([frame_input, past_action_input, arm_input])
+    model = Model([frame_input, past_action_input, arm_input],
+                  [inner1, inner2])
     if PRINT_SUMMARY:
         print(model.summary())
     return model
@@ -287,9 +294,3 @@ def create_trainer_rnd():
     if PRINT_SUMMARY:
         print(model.summary())
     return model
-
-
-if __name__ == '__main__':
-    player_predictor = create_player_predictor()
-    trainer_predictor = create_trainer_predictor()
-    target_predictor = create_target_predictor()
