@@ -343,7 +343,7 @@ if __name__ == '__main__':
 
     trainer = Trainer(connections)
     listen_thread = threading.Thread(target = trainer.listen)
-    train_thread = threading.Thread(target = trainer.train)
+    # train_thread = threading.Thread(target = trainer.train)
     listen_thread.start()
-    train_thread.start()
+    # train_thread.start()
     listen_thread.join()
