@@ -1,3 +1,4 @@
+import numpy as np
 from numpy import exp, log
 
 
@@ -28,7 +29,8 @@ for i in range(NUM_ARMS):
         b = MAX_BETA / (1. + exp(-x))
         BETAS.append(b)
 
-MAX_GAMMA = 0.99
+
+MAX_GAMMA = 0.95
 MIN_GAMMA = 0.85
 GAMMAS = []
 for i in range(NUM_ARMS):
@@ -53,8 +55,8 @@ N_STEP = 10
 
 
 EXTRINSIC_REWARD_NORM = 18.
-INTRINSIC_REWARD_NORM = 10.
-MAX_INTRINSIC_REWARD = 2.
+INTRINSIC_REWARD_NORM = 1.
+MAX_INTRINSIC_REWARD = 1.
 PER_ETA = 0.9
 PER_EPSILON = 1e-5
 
@@ -62,11 +64,10 @@ PER_EPSILON = 1e-5
 LR = 1e-4
 RND_LR = 5 * LR
 CLIP_NORM = 50.
-Q_CLIP = 10.
+Q_CLIP = 50.
 BATCH_SIZE = 16
 MAX_MEMORY = 10000
-# WARM_UP = MAX_MEMORY // 3
-WARM_UP = 100 * BATCH_SIZE
+WARM_UP = min(150 * BATCH_SIZE, MAX_MEMORY // 3)
 
 
 NEAREST_NEIGHBOURS = 10
@@ -80,3 +81,12 @@ MAX_RND = 5.
 PRINT_SUMMARY = False
 PRINT_GAME_DATA = True
 RENDER = True
+
+
+MASK_1 = np.zeros((TRACE_LENGTH - 1, TRACE_LENGTH - 1), dtype = np.float32)
+for i in range(TRACE_LENGTH - 1):
+    for j in range(i, TRACE_LENGTH - 1):
+        MASK_1[i, j] = 1.
+MASK_1 = np.repeat(MASK_1[None, ...], BATCH_SIZE, axis = 0)
+MASK_2 = 1. - MASK_1.copy()
+I, J = np.ogrid[:BATCH_SIZE, :TRACE_LENGTH]

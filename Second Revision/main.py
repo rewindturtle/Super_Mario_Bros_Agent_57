@@ -28,31 +28,6 @@ def h_inv(x):
     return np.sign(x) * (f1 + f2)
 
 
-def get_y2(qte, qti, qte2, qti2, gamma_tensor, action_tensor, a_opt, e_reward_tensor, i_reward_tensor, done_tensor):
-    ye2 = np.zeros((BATCH_SIZE, TRACE_LENGTH), dtype = np.float32)
-    yi2 = np.zeros((BATCH_SIZE, TRACE_LENGTH), dtype = np.float32)
-    for i in range(BATCH_SIZE):
-        for j in range(TRACE_LENGTH):
-            ye = 0.
-            yi = 0.
-
-            ### Trying to speed up nested for loop for retrace loss
-
-            for n in range(j + 1, TRACE_LENGTH):
-                c = np.prod(RETRACE * (action_tensor[i, (j + 1):n] == a_opt[i, (j + 1):n]))
-                if c != 0.:
-                    g = gamma_tensor[i] ** n
-                    tde = e_reward_tensor[i, n] + gamma_tensor[i] * done_tensor[i, n] * h_inv(np.max(qte2[i, n])) - h_inv(
-                        qte[i, n, action_tensor[i, n]])
-                    tdi = i_reward_tensor[i, n] + gamma_tensor[i] * done_tensor[i, n] * h_inv(np.max(qti2[i, n])) - h_inv(
-                        qti[i, n, action_tensor[i, n]])
-                    ye += g * c * tde
-                    yi += g * c * tdi
-            ye2[i, j] = ye
-            yi2[i, j] = yi
-    return ye2, yi2
-
-
 class Trainer:
     def __init__(self, connections):
         self.connections = connections
@@ -168,11 +143,12 @@ class Trainer:
         while True:
             self.memory_lock.acquire()
             td_tensor = np.array(self.tds, dtype = np.float32)
+            td_tensor = np.nan_to_num(td_tensor)
             td_prob = td_tensor / np.sum(td_tensor)
             num_td = td_prob.shape[0]
             batch_indices = np.random.choice(num_td, BATCH_SIZE, p = td_prob, replace = False).astype(np.int32)
-            state_tensor = np.array([self.states[i] for i in batch_indices], dtype = np.float32) / 255.
-            next_state_tensor = np.array([self.next_states[i] for i in batch_indices], dtype = np.float32) / 255.
+            state_tensor = np.array([self.states[i].copy() for i in batch_indices], dtype = np.float32) / 255.
+            next_state_tensor = np.array([self.next_states[i].copy() for i in batch_indices], dtype = np.float32) / 255.
             action_tensor = np.array([self.actions[i] for i in batch_indices], dtype = np.int32)
             past_action_tensor = np.array([self.past_actions[i] for i in batch_indices], dtype = np.int32)
             e_reward_tensor = np.array([self.e_rewards[i] for i in batch_indices], dtype = np.float32)
@@ -203,35 +179,37 @@ class Trainer:
             qti = qti.numpy()
             qte2 = qte2.numpy()
             qti2 = qti2.numpy()
-            qt = qte + beta_tensor[:, None, None] * qti
+            qt2 = qte2 + beta_tensor[:, None, None] * qti2
 
             training_qe2 = qe.copy()
             training_qi2 = qi.copy()
-            a_opt = np.argmax(qt, axis = 2)
-            I, J = np.ogrid[:BATCH_SIZE, :TRACE_LENGTH]
+            a_opt = np.argmax(qt2, axis = 2)
 
             ye1 = e_reward_tensor + gamma_tensor[:, None] * done_tensor * h_inv(qte2[I, J, a_opt])
             yi1 = i_reward_tensor + gamma_tensor[:, None] * done_tensor * h_inv(qti2[I, J, a_opt])
 
-            # ye2 = np.zeros((BATCH_SIZE, TRACE_LENGTH), dtype = np.float32)
-            # yi2 = np.zeros((BATCH_SIZE, TRACE_LENGTH), dtype = np.float32)
-            # for i in range(BATCH_SIZE):
-            #     for j in range(TRACE_LENGTH):
-            #         ye = 0.
-            #         yi = 0.
-            #         for n in range(j + 1, TRACE_LENGTH):
-            #             g = gamma_tensor[i] ** n
-            #             c = np.prod(RETRACE * (action_tensor[i, 1:n] == a_opt[i, 1:n]))
-            #             tde = e_reward_tensor[i, n] + gamma_tensor[i] * done_tensor[i, n] * h_inv(np.max(qte2[i, n])) - h_inv(qte[i, n, action_tensor[i, n]])
-            #             tdi = i_reward_tensor[i, n] + gamma_tensor[i] * done_tensor[i, n] * h_inv(np.max(qti2[i, n])) - h_inv(qti[i, n, action_tensor[i, n]])
-            #             ye += g * c * tde
-            #             yi += g * c * tdi
-            #         ye2[i, j] = ye
-            #         yi2[i, j] = yi
-            ye2, yi2 = get_y2(qte, qti, qte2, qti2, gamma_tensor, action_tensor, a_opt, e_reward_tensor, i_reward_tensor, done_tensor)
+            ye2 = np.zeros((BATCH_SIZE, TRACE_LENGTH), dtype = np.float32)
+            yi2 = np.zeros((BATCH_SIZE, TRACE_LENGTH), dtype = np.float32)
+            c = RETRACE * gamma_tensor[:, None] * (a_opt[:, :-1] == action_tensor[:, :-1]).astype(np.float32)
+            c = MASK_1 * np.repeat(c[:, None, :], TRACE_LENGTH - 1, axis = 1)
+            c = np.cumprod(c + MASK_2, axis = 2) - MASK_2
+
+            tde1 = e_reward_tensor[range(BATCH_SIZE), 1:] + gamma_tensor[:, None] * h_inv(qte2[I, J[:, :-1], a_opt[:, 1:]])
+            tde2 = h_inv(qte[I, J[:, :-1], action_tensor[:, :-1]])
+            tde = tde1 - tde2
+            tde = np.repeat(tde[:, None, :], TRACE_LENGTH - 1, axis = 1)
+
+            tdi1 = i_reward_tensor[range(BATCH_SIZE), 1:] + gamma_tensor[:, None] * h_inv(qti2[I, J[:, :-1], a_opt[:, 1:]])
+            tdi2 = h_inv(qti[I, J[:, :-1], action_tensor[:, :-1]])
+            tdi = tdi1 - tdi2
+            tdi = np.repeat(tdi[:, None, :], TRACE_LENGTH - 1, axis=1)
+
+            ye2[:, :-1] = np.sum(c * tde, axis = 2)
+            yi2[:, :-1] = np.sum(c * tdi, axis = 2)
 
             training_qe2[I, J, action_tensor] = h(ye1 + ye2)
             training_qi2[I, J, action_tensor] = h(yi1 + yi2)
+
             softmax_tensor[range(BATCH_SIZE * TRACE_LENGTH), hash_a_tensor] = 1.
 
             self.network_lock.acquire()

@@ -30,18 +30,6 @@ def get_external_reward(x, past_x):
             return reward
 
 
-def get_d_and_b(dm, ds, bm, bs):
-    if np.random.random() < ARM_EPSILON:
-        dx = (1. - MIN_DISCOUNT) * np.random.random() + MIN_DISCOUNT
-        bx = (MAX_BETA - MIN_BETA) * np.random.random() + MIN_BETA
-    else:
-        dx = np.random.normal(dm, ds)
-        bx = np.random.normal(bm, bs)
-        dx = np.clip(dx, MIN_DISCOUNT, 1.)
-        bx = np.clip(bx, MIN_BETA, MAX_BETA)
-    return dx, bx
-
-
 def player_process(child_con, player_num, epsilon, level=0):
     import tensorflow as tf
     tf.config.set_visible_devices([], 'GPU')
@@ -216,8 +204,10 @@ def player_process(child_con, player_num, epsilon, level=0):
             batch_arms.append(arm)
 
         total_reward_window.append(total_reward + beta * np.sum(intrinsic_rewards))
+        arm_window.append(arm)
         if len(total_reward_window) > ARM_WINDOW:
             total_reward_window = total_reward_window[1:]
+            arm_window = arm_window[1:]
 
         data = [player_num, num_games, total_reward, np.sum(intrinsic_rewards), gamma, beta, epsilon, steps, max_x]
         batch = [batch_states, batch_next_states, batch_actions, batch_past_actions, batch_e_rewards, batch_i_rewards,
