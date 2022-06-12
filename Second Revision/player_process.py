@@ -125,11 +125,7 @@ def player_process(child_con, player_num, epsilon, level=0):
 
         num_samples = np.ceil(len(actions) / REPLAY_PERIOD).astype(int)
         state_array = np.array(states, dtype = np.uint8)
-        next_state_array = np.roll(state_array.copy(), -1, axis = 0)
-        next_state_array[-1, ...] = np.zeros((FRAME_HEIGHT, FRAME_WIDTH), dtype = np.uint8)
         action_array = np.array(actions, dtype = np.int32)
-        past_action_array = np.roll(action_array.copy(), 1)
-        past_action_array[0] = 0
         e_reward_array = np.array(extrinsic_rewards, dtype = np.float32)
         done_array = np.array(dones, dtype = np.float32)
 
@@ -137,17 +133,17 @@ def player_process(child_con, player_num, epsilon, level=0):
         hash = hasher(s_array).numpy()
         rnd = rnd_net(s_array[1:, ...]).numpy()
         rnd_t = rnd_target(s_array[1:, ...]).numpy()
-        h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis=0)
+        h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis = 0)
         h2 = np.tile(hash.copy(), (hash.shape[0] - 1, 1))
-        h3 = np.linalg.norm(h1 - h2, axis=1) ** 2
-        h3 = np.reshape(h3[np.newaxis, :], (hash.shape[0] - 1, hash.shape[0]))
-        dists = np.sort(h3, axis=1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
+        h3 = np.linalg.norm(h1 - h2, axis = 1) ** 2
+        h3 = np.reshape(h3[None, :], (hash.shape[0] - 1, hash.shape[0]))
+        dists = np.sort(h3, axis = 1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
         dists = dists / max(np.mean(dists), 1e-9)
-        dists = np.clip(dists - KERNEL_CLUSTER, 0., np.inf)
+        dists = np.clip(dists - KERNEL_CLUSTER, a_min = 0, a_max = None)
         kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
-        score = np.sqrt(np.sum(kernel, axis=1)) + KERNEL_CONSTANT
+        score = np.sqrt(np.sum(kernel, axis = 1)) + KERNEL_CONSTANT
         rt = np.where(score > KERNEL_MAX_SCORE, 0, 1. / score)
-        err = np.linalg.norm(rnd - rnd_t, axis=1) ** 2
+        err = np.linalg.norm(rnd - rnd_t, axis = 1) ** 2
         err_mean = np.mean(err)
         err_std = max(np.std(err), 1e-9)
         rnd_alpha = 1. + (err - err_mean) / err_std
@@ -163,42 +159,38 @@ def player_process(child_con, player_num, epsilon, level=0):
         td_array = np.absolute(td1 - td2)
 
         batch_states = []
-        batch_next_states = []
         batch_actions = []
-        batch_past_actions = []
         batch_e_rewards = []
-        batch_i_rewards = []
         batch_dones = []
         batch_tds = []
         batch_arms = []
         for i in range(num_samples):
-            trace_states = np.zeros((TRACE_LENGTH, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.uint8)
-            trace_next_states = np.zeros((TRACE_LENGTH, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.uint8)
-            trace_actions = np.zeros(TRACE_LENGTH, dtype = np.int32)
-            trace_past_actions = np.zeros(TRACE_LENGTH, dtype = np.int32)
+            trace_states = np.zeros((TRACE_LENGTH + 1, FRAME_HEIGHT, FRAME_WIDTH), dtype = np.uint8)
+            trace_actions = np.zeros(TRACE_LENGTH + 1, dtype = np.int32)
             trace_e_rewards = np.zeros(TRACE_LENGTH, dtype = np.float32)
-            trace_i_rewards = np.zeros(TRACE_LENGTH, dtype = np.float32)
             trace_dones = np.zeros(TRACE_LENGTH, dtype = np.float32)
 
             end = min(REPLAY_PERIOD * (i + 2), action_array.shape[0])
-            trace_end = min(TRACE_LENGTH, end - REPLAY_PERIOD * i)
+            s_end = min(REPLAY_PERIOD * (i + 2) + 1, action_array.shape[0])
 
-            trace_states[:trace_end, ...] =  state_array[REPLAY_PERIOD * i:end].copy()
-            trace_next_states[:trace_end, ...] = next_state_array[REPLAY_PERIOD * i:end].copy()
-            trace_actions[:trace_end] = action_array[REPLAY_PERIOD * i:end].copy()
-            trace_past_actions[:trace_end] = past_action_array[REPLAY_PERIOD * i:end].copy()
+            trace_end = end - REPLAY_PERIOD * i
+            state_end = s_end - REPLAY_PERIOD * i
+            action_end = end - REPLAY_PERIOD * i + 1
+
+            trace_states[:state_end, ...] =  state_array[REPLAY_PERIOD * i:s_end].copy()
+            if i == 0:
+                trace_actions[1:action_end] = action_array[REPLAY_PERIOD * i:end].copy()
+            else:
+                trace_actions[:action_end] = action_array[(REPLAY_PERIOD * i - 1):end].copy()
+
             trace_e_rewards[:trace_end] = e_reward_array[REPLAY_PERIOD * i:end].copy()
-            trace_i_rewards[:trace_end] = intrinsic_rewards[REPLAY_PERIOD * i:end].copy()
             trace_dones[:trace_end] = done_array[REPLAY_PERIOD * i:end].copy()
             tds = td_array[REPLAY_PERIOD * i:end].copy()
             trace_td = PER_ETA * np.max(tds) + (1. - PER_ETA) * np.mean(tds) + PER_EPSILON
 
             batch_states.append(trace_states)
-            batch_next_states.append(trace_next_states)
             batch_actions.append(trace_actions)
-            batch_past_actions.append(trace_past_actions)
             batch_e_rewards.append(trace_e_rewards)
-            batch_i_rewards.append(trace_i_rewards)
             batch_dones.append(trace_dones)
             batch_tds.append(trace_td)
             batch_arms.append(arm)
@@ -210,8 +202,7 @@ def player_process(child_con, player_num, epsilon, level=0):
             arm_window = arm_window[1:]
 
         data = [player_num, num_games, total_reward, np.sum(intrinsic_rewards), gamma, beta, epsilon, steps, max_x]
-        batch = [batch_states, batch_next_states, batch_actions, batch_past_actions, batch_e_rewards, batch_i_rewards,
-                 batch_dones, batch_tds, batch_arms, data]
+        batch = [batch_states, batch_actions, batch_e_rewards, batch_dones, batch_tds, batch_arms, data]
         child_con.send(('batch', batch))
         child_con.send(('weights', None))
         weights = child_con.recv()
