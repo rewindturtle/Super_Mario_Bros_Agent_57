@@ -31,8 +31,8 @@ def combine_q(input_layer):
     qe = h_inv(input_layer[0])
     qi = h_inv(input_layer[1])
     betas = convert_to_tensor(BETAS)
-    beta = gather(betas, input_layer[2])
-    # beta = K.sum(betas * input_layer[2])
+    arm_hot = K.squeeze(one_hot(input_layer[2], NUM_ARMS), axis = 1)
+    beta = K.sum(betas * arm_hot)
     q = h(qe + beta * qi)
     return q
 

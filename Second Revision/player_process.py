@@ -157,6 +157,7 @@ def player_process(child_con, player_num, epsilon, level=0):
         td1 = h(e_reward_array + beta * intrinsic_rewards + gamma * done_array * h_inv(np.max(next_q, axis = 1)))
         td2 = q[range(action_array.shape[0]), action_array]
         td_array = np.absolute(td1 - td2)
+        td_array = np.nan_to_num(td_array)
 
         batch_states = []
         batch_actions = []

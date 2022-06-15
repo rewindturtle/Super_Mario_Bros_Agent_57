@@ -137,12 +137,12 @@ class Trainer:
         while True:
             self.memory_lock.acquire()
             td_tensor = np.array(self.tds, dtype = np.float32)
-            td_tensor = np.nan_to_num(td_tensor)
+            # td_tensor = np.nan_to_num(td_tensor)
             td_prob = td_tensor / np.sum(td_tensor)
             num_td = td_prob.shape[0]
             batch_indices = np.random.choice(num_td, BATCH_SIZE, p = td_prob, replace = False).astype(np.int32)
-            state_tensor = np.array([self.states[i][:TRACE_LENGTH, :, :].copy() for i in batch_indices], dtype = np.float32) / 255.
-            next_state_tensor = np.array([self.states[i][1:, :, :].copy() for i in batch_indices], dtype = np.float32) / 255.
+            state_tensor = np.array([self.states[i][:TRACE_LENGTH, ...].copy() for i in batch_indices], dtype = np.float32) / 255.
+            next_state_tensor = np.array([self.states[i][1:, ...].copy() for i in batch_indices], dtype = np.float32) / 255.
             action_tensor = np.array([self.actions[i][1:] for i in batch_indices], dtype = np.int32)
             past_action_tensor = np.array([self.actions[i][:TRACE_LENGTH] for i in batch_indices], dtype = np.int32)
             e_reward_tensor = np.array([self.e_rewards[i] for i in batch_indices], dtype = np.float32)
@@ -208,10 +208,12 @@ class Trainer:
             tde2 = h_inv(qte[I, J[:, :-1], action_tensor[:, :-1]])
             tde = tde1 - tde2
             tde = np.repeat(tde[:, None, :], TRACE_LENGTH - 1, axis = 1)
+            tde = np.nan_to_num(tde)
 
             tdi1 = i_reward_tensor[range(BATCH_SIZE), 1:] + gamma_tensor[:, None] * h_inv(qti2[I, J[:, :-1], a_opt[:, 1:]])
             tdi2 = h_inv(qti[I, J[:, :-1], action_tensor[:, :-1]])
             tdi = tdi1 - tdi2
+            tdi = np.nan_to_num(tdi)
             tdi = np.repeat(tdi[:, None, :], TRACE_LENGTH - 1, axis=1)
 
             ye2[:, :-1] = np.sum(c * tde, axis = 2)
@@ -255,6 +257,7 @@ class Trainer:
             q1 = qe[I, J, action_tensor] + beta_tensor[:, None] * qi[I, J, action_tensor]
             q2 = qe2 + beta_tensor[:, None, None] * qi2
             td = np.absolute(h(r + done_tensor * gamma_tensor[:, None] * h_inv(np.max(q2, axis = 2))) - q1)
+            td = np.nan_to_num(td)
             td = PER_ETA * np.max(td, axis = 1) + (1. - PER_ETA) * np.mean(td, axis = 1) + PER_EPSILON
 
             self.memory_lock.acquire()
@@ -262,13 +265,9 @@ class Trainer:
                 self.tds[batch_indices[i]] = td[i]
             if len(self.actions) > MAX_MEMORY:
                 diff = len(self.actions) - MAX_MEMORY
-
                 self.states = self.states[diff:]
-                self.next_states = self.next_states[diff:]
                 self.actions = self.actions[diff:]
-                self.past_actions = self.past_actions[diff:]
                 self.e_rewards = self.e_rewards[diff:]
-                self.i_rewards = self.i_rewards[diff:]
                 self.dones = self.dones[diff:]
                 self.tds = self.tds[diff:]
                 self.arms = self.arms[diff:]
