@@ -10,11 +10,10 @@ def h(x):
 
 
 def h_inv(x):
-    x = np.clip(x, -Q_CLIP, Q_CLIP)
     arg = 4 * SQUISH * (abs(x) + SQUISH + 1.) + 1.
-    f1 = (1. - np.sqrt(arg)) / (2. * (SQUISH ** 2))
-    f2 = (abs(x) + 1) / SQUISH
-    return np.sign(x) * (f1 + f2)
+    f1 = (1. - np.sqrt(arg)) / (2. * SQUISH)
+    f2 = abs(x) + 1.
+    return np.sign(x) * (f1 + f2) / SQUISH
 
 
 def get_external_reward(x, past_x):
@@ -38,16 +37,12 @@ def player_process(child_con, player_num, epsilon, level=0):
     ''' Initialize Predictor and Environment '''
     env = super_mario_bros_env.make(level)
     predictor = nn.create_player_predictor()
-    hasher = nn.create_player_hasher()
-    rnd_net = nn.create_player_rnd()
-    rnd_target = nn.create_target_rnd()
+    intrinsic_calc = nn.create_intrinsic_reward_calc()
 
-    child_con.send(('initialize', None))
+    child_con.send(('weights', None))
     weights = child_con.recv()
     predictor.set_weights(weights[0])
-    hasher.set_weights(weights[1])
-    rnd_net.set_weights(weights[2])
-    rnd_target.set_weights(weights[3])
+    intrinsic_calc.set_weights(weights[1])
 
     total_reward_window = []
 
@@ -94,12 +89,16 @@ def player_process(child_con, player_num, epsilon, level=0):
             env.render()
 
         while True:
-            s = np.expand_dims(current_state.copy().astype(np.float32) / 255., axis = 0)
-            q_value = predictor([s, np.array([[past_a]], dtype = np.int32), np.array([[arm]], dtype = np.int32)]).numpy().squeeze()
+            s = current_state.copy()[None, ...].astype(np.float32) / 255.
+            qe, qi = predictor([s, np.array([[past_a]], dtype = np.int32), np.array([[arm]], dtype = np.int32)])
+            qe = h_inv(qe.numpy().squeeze())
+            qi = h_inv(qi.numpy().squeeze())
+            q = h(qe + beta * qi)
             if (np.random.random() < epsilon) or (num_games < PLAYER_WARM_UP):
                 action = np.random.randint(NUM_ACTIONS)
             else:
-                action = np.argmax(q_value)
+                action = np.argmax(q)
+            q_values.append(q)
 
             next_state, x, done, info = env.step(action)
             if RENDER:
@@ -112,7 +111,6 @@ def player_process(child_con, player_num, epsilon, level=0):
             states.append(current_state)
             actions.append(action)
             extrinsic_rewards.append(extrinsic_reward)
-            q_values.append(q_value)
             dones.append(not done)
 
             if done:
@@ -129,37 +127,18 @@ def player_process(child_con, player_num, epsilon, level=0):
         e_reward_array = np.array(extrinsic_rewards, dtype = np.float32)
         done_array = np.array(dones, dtype = np.float32)
 
-        s_array = state_array.copy().astype(np.float32) / 255.
-        hash = hasher(s_array).numpy()
-        rnd = rnd_net(s_array[1:, ...]).numpy()
-        rnd_t = rnd_target(s_array[1:, ...]).numpy()
-        h1 = np.repeat(hash[1:, :].copy(), hash.shape[0], axis = 0)
-        h2 = np.tile(hash.copy(), (hash.shape[0] - 1, 1))
-        h3 = np.linalg.norm(h1 - h2, axis = 1) ** 2
-        h3 = np.reshape(h3[None, :], (hash.shape[0] - 1, hash.shape[0]))
-        dists = np.sort(h3, axis = 1)[:, 1:(NEAREST_NEIGHBOURS + 1)]
-        dists = dists / max(np.mean(dists), 1e-5)
-        dists = np.clip(dists - KERNEL_CLUSTER, a_min = 0, a_max = None)
-        kernel = KERNEL_EPSILON / (dists + KERNEL_EPSILON)
-        score = np.sqrt(np.sum(kernel, axis = 1)) + KERNEL_CONSTANT
-        rt = np.where(score > KERNEL_MAX_SCORE, 0, 1. / score)
-        err = np.linalg.norm(rnd - rnd_t, axis = 1) ** 2
-        err_mean = np.mean(err)
-        err_std = max(np.std(err), 1e-5)
-        rnd_alpha = 1. + (err - err_mean) / err_std
-        intrinsic_rewards = rt * np.clip(rnd_alpha, 0., MAX_RND) / INTRINSIC_REWARD_NORM
-        # intrinsic_rewards = np.clip(intrinsic_rewards, -MAX_INTRINSIC_REWARD, MAX_INTRINSIC_REWARD)
-        intrinsic_rewards = np.append(intrinsic_rewards, 0.)
-        intrinsic_rewards = np.nan_to_num(intrinsic_rewards)
-        # print(intrinsic_rewards)
+        q_array = np.array(q_values, dtype = np.float32)
+        next_q_array = np.roll(q_array.copy(), -1, axis = 0)
+        next_q_array[-1, ...] = np.zeros(NUM_ACTIONS, dtype = np.float32)
 
-        q = np.array(q_values, dtype = np.float32)
-        next_q = np.roll(q.copy(), -1, axis = 0)
-        next_q[-1, ...] = np.zeros(NUM_ACTIONS, dtype = np.float32)
-        td1 = h(e_reward_array + beta * intrinsic_rewards + gamma * done_array * h_inv(np.max(next_q, axis = 1)))
-        td2 = q[range(action_array.shape[0]), action_array]
+        s_array = state_array.copy().astype(np.float32) / 255.
+        ns_array = np.roll(s_array.copy(), -1, axis = 0)
+        ns_array[-1, ...] = np.zeros((FRAME_HEIGHT, FRAME_WIDTH), dtype = np.float32)
+        i_reward_array = intrinsic_calc([s_array, ns_array, action_array]).numpy().squeeze()
+
+        td1 = h(e_reward_array + beta * i_reward_array + gamma * done_array * h_inv(np.max(next_q_array, axis = 1)))
+        td2 = h(q_array[range(action_array.shape[0]), action_array])
         td_array = np.absolute(td1 - td2)
-        td_array = np.nan_to_num(td_array)
 
         batch_states = []
         batch_actions = []
@@ -198,17 +177,16 @@ def player_process(child_con, player_num, epsilon, level=0):
             batch_tds.append(trace_td)
             batch_arms.append(arm)
 
-        total_reward_window.append(total_reward + beta * np.sum(intrinsic_rewards))
+        total_i_reward = np.sum(i_reward_array)
+        total_reward_window.append(total_reward + beta * total_i_reward)
         arm_window.append(arm)
         if len(total_reward_window) > ARM_WINDOW:
             total_reward_window = total_reward_window[1:]
             arm_window = arm_window[1:]
 
-        data = [player_num, num_games, total_reward, np.sum(intrinsic_rewards), gamma, beta, epsilon, steps, max_x]
+        data = [player_num, num_games, total_reward, total_i_reward, gamma, beta, epsilon, steps, max_x]
         batch = [batch_states, batch_actions, batch_e_rewards, batch_dones, batch_tds, batch_arms, data]
         child_con.send(('batch', batch))
         child_con.send(('weights', None))
         weights = child_con.recv()
         predictor.set_weights(weights[0])
-        hasher.set_weights(weights[1])
-        rnd_net.set_weights(weights[2])
