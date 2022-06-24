@@ -5,6 +5,8 @@ import multiprocessing as mp
 import threading
 import numpy as np
 import time
+import gc
+import tensorflow.keras.backend as K
 from timeit import default_timer as timer
 
 
@@ -20,6 +22,7 @@ def h(x):
 
 
 def h_inv(x):
+    x = np.clip(x, -Q_CLIP, Q_CLIP)
     a = 4 * SQUISH * (np.absolute(x) + SQUISH + 1.) + 1.
     f1 = (1. - np.sqrt(a)) / (2. * SQUISH)
     f2 = np.absolute(x) + 1.
@@ -171,11 +174,15 @@ class Trainer:
                                     batch_size = BATCH_SIZE,
                                     verbose = 0,
                                     sample_weight = r_weights)
+            K.clear_session()
+            gc.collect()
             self.trainer_forward.fit([state_hash, r_action_tensor],
                                      [next_state_hash],
                                      batch_size = BATCH_SIZE,
                                      verbose = 0,
                                      sample_weight = r_weights)
+            K.clear_session()
+            gc.collect()
             self.update_intrinsic_calc_and_hasher()
 
             qe, qi = self.predictor([state_tensor, past_action_tensor, arm_tensor])
@@ -229,6 +236,8 @@ class Trainer:
                                batch_size = BATCH_SIZE,
                                verbose = 0,
                                sample_weight = weights)
+            K.clear_session()
+            gc.collect()
             qe, qi = self.predictor([state_tensor, past_action_tensor, arm_tensor])
             qe2, qi2 = self.predictor([next_state_tensor, action_tensor, arm_tensor])
             self.network_lock.release()

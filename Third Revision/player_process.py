@@ -10,6 +10,7 @@ def h(x):
 
 
 def h_inv(x):
+    x = np.clip(x, -Q_CLIP, Q_CLIP)
     arg = 4 * SQUISH * (abs(x) + SQUISH + 1.) + 1.
     f1 = (1. - np.sqrt(arg)) / (2. * SQUISH)
     f2 = abs(x) + 1.

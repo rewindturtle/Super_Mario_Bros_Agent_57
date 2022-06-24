@@ -18,6 +18,7 @@ def h(input_layer):
 
 
 def h_inv(input_layer):
+    input_layer = K.clip(input_layer, -Q_CLIP, Q_CLIP)
     arg = 4 * SQUISH * (K.abs(input_layer) + SQUISH + 1) + 1
     f1 = (1 - K.sqrt(arg)) / (2 * SQUISH)
     f2 = (K.abs(input_layer) + 1)
